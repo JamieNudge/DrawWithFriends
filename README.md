@@ -86,6 +86,19 @@ Current MVP is complete! Future enhancements could include:
 - Works on iPhone and iPad
 - Supports Apple Pencil on compatible devices
 
+## 🌐 Website Files
+
+The repository also includes a simple landing website for DrawWithFriends:
+
+- **index.html** — Main landing page and frontend room UI shell
+- **privacy.html** — Privacy policy page
+- **support.html** — Support / contact page
+- **styles.css** — Site styling
+
+These are frontend-only starter pages placed at the repository root. No backend or real-time sync included — update and wire up as needed.
+
+To view locally, simply open `index.html` in a web browser. To publish, consider using GitHub Pages or your preferred hosting platform.
+
 ---
 
 Built with ❤️ by Jamie | November 2025
