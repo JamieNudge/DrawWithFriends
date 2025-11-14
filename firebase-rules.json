@@ -1,0 +1,106 @@
+{
+  "rules": {
+    "rooms": {
+      "$roomCode": {
+        ".read": true,
+        ".write": true,
+        
+        "mode": {
+          ".validate": "newData.isString() && (newData.val() == 'turnBased' || newData.val() == 'simultaneous')"
+        },
+        
+        "createdAt": {
+          ".validate": "newData.isNumber()"
+        },
+        
+        "creatorId": {
+          ".validate": "newData.isString()"
+        },
+        
+        "currentTurn": {
+          ".validate": "newData.isString()"
+        },
+        
+        "turnStartTime": {
+          ".validate": "newData.isNumber()"
+        },
+        
+        "users": {
+          "$userId": {
+            ".validate": "newData.hasChildren(['joinedAt', 'isActive'])",
+            "joinedAt": {
+              ".validate": "newData.isNumber()"
+            },
+            "isActive": {
+              ".validate": "newData.isBoolean()"
+            }
+          }
+        },
+        
+        "sharedDrawing": {
+          ".validate": "newData.hasChildren(['data', 'lastEditor', 'timestamp'])",
+          "data": {
+            ".validate": "newData.isString()"
+          },
+          "lastEditor": {
+            ".validate": "newData.isString()"
+          },
+          "timestamp": {
+            ".validate": "newData.isNumber()"
+          },
+          "originalSize": {
+            "width": {
+              ".validate": "newData.isNumber()"
+            },
+            "height": {
+              ".validate": "newData.isNumber()"
+            }
+          },
+          "originalBounds": {
+            "x": {
+              ".validate": "newData.isNumber()"
+            },
+            "y": {
+              ".validate": "newData.isNumber()"
+            },
+            "width": {
+              ".validate": "newData.isNumber()"
+            },
+            "height": {
+              ".validate": "newData.isNumber()"
+            }
+          }
+        },
+        
+        "strokes": {
+          "$strokeId": {
+            ".validate": "newData.hasChildren(['data', 'senderId', 'timestamp'])",
+            "data": {
+              ".validate": "newData.isString()"
+            },
+            "senderId": {
+              ".validate": "newData.isString()"
+            },
+            "originalUserId": {
+              ".validate": "newData.isString()"
+            },
+            "timestamp": {
+              ".validate": "newData.isNumber()"
+            },
+            "canvasSize": {
+              "width": {
+                ".validate": "newData.isNumber()"
+              },
+              "height": {
+                ".validate": "newData.isNumber()"
+              }
+            }
+          },
+          ".indexOn": ["timestamp"]
+        }
+      }
+    }
+  }
+}
+
+

@@ -1,0 +1,349 @@
+//
+//  DrawingCanvasView.swift
+//  Draw With Friends
+//
+//  Created by Jamie on 09/11/2025.
+//
+
+import SwiftUI
+import Combine
+import PencilKit
+
+struct DrawingCanvasView: View {
+    @StateObject private var firebaseManager = FirebaseManager.shared
+    @StateObject private var canvasViewModel = CanvasViewModel()
+    @State private var showRoomCode = true
+    @State private var selectedColor: Color = .black
+    @State private var showColorPicker = false
+    
+    let userId = UUID().uuidString
+    
+    var body: some View {
+        ZStack {
+            // Canvas
+            CanvasView(
+                canvasView: $canvasViewModel.canvasView,
+                onDrawingChanged: { drawing in
+                    canvasViewModel.handleDrawingChange(drawing, userId: userId)
+                }
+            )
+            .ignoresSafeArea()
+            
+            // Top bar
+            VStack {
+                HStack {
+                    // Room code display
+                    if let roomCode = firebaseManager.currentRoomCode {
+                        HStack {
+                            Text("Room: \(roomCode)")
+                                .font(.headline)
+                                .padding(.horizontal, 15)
+                                .padding(.vertical, 8)
+                                .background(Color.white.opacity(0.9))
+                                .cornerRadius(20)
+                            
+                            Button(action: {
+                                UIPasteboard.general.string = roomCode
+                            }) {
+                                Image(systemName: "doc.on.doc")
+                                    .foregroundColor(.blue)
+                                    .padding(8)
+                                    .background(Color.white.opacity(0.9))
+                                    .clipShape(Circle())
+                            }
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // Clear canvas button
+                    Button(action: clearCanvas) {
+                        Image(systemName: "trash")
+                            .foregroundColor(.red)
+                            .padding(8)
+                            .background(Color.white.opacity(0.9))
+                            .clipShape(Circle())
+                    }
+                    
+                    // Leave room button
+                    Button(action: leaveRoom) {
+                        Image(systemName: "xmark")
+                            .foregroundColor(.gray)
+                            .padding(8)
+                            .background(Color.white.opacity(0.9))
+                            .clipShape(Circle())
+                    }
+                }
+                .padding()
+                
+                Spacer()
+                
+                // Tool palette (bottom)
+                HStack(spacing: 20) {
+                    // Color picker button
+                    Button(action: { showColorPicker.toggle() }) {
+                        Circle()
+                            .fill(selectedColor)
+                            .frame(width: 40, height: 40)
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.white, lineWidth: 3)
+                            )
+                            .shadow(radius: 2)
+                    }
+                    
+                    // Undo button
+                    Button(action: {
+                        canvasViewModel.canvasView.drawing.append(PKStroke())
+                        if canvasViewModel.canvasView.drawing.strokes.count > 0 {
+                            var drawing = canvasViewModel.canvasView.drawing
+                            drawing.strokes.removeLast()
+                            canvasViewModel.canvasView.drawing = drawing
+                        }
+                    }) {
+                        Image(systemName: "arrow.uturn.backward")
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.blue)
+                            .clipShape(Circle())
+                    }
+                }
+                .padding()
+            }
+            
+            // Color picker overlay
+            if showColorPicker {
+                ZStack {
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            showColorPicker = false
+                        }
+                    
+                    VStack {
+                        Text("Choose Color")
+                            .font(.headline)
+                            .padding()
+                        
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 15) {
+                            ForEach(ColorOption.allColors, id: \.self) { colorOption in
+                                Circle()
+                                    .fill(colorOption.color)
+                                    .frame(width: 50, height: 50)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(selectedColor == colorOption.color ? Color.white : Color.clear, lineWidth: 3)
+                                    )
+                                    .onTapGesture {
+                                        selectedColor = colorOption.color
+                                        canvasViewModel.setColor(colorOption.color)
+                                        showColorPicker = false
+                                    }
+                            }
+                        }
+                        .padding()
+                    }
+                    .background(Color.white)
+                    .cornerRadius(20)
+                    .padding(40)
+                }
+            }
+        }
+        .onAppear {
+            canvasViewModel.startObserving()
+        }
+    }
+    
+    private func clearCanvas() {
+        canvasViewModel.canvasView.drawing = PKDrawing()
+        firebaseManager.clearCanvas()
+    }
+    
+    private func leaveRoom() {
+        firebaseManager.leaveRoom()
+        // This should trigger navigation back to room selection
+    }
+}
+
+// MARK: - Canvas View (UIKit wrapper)
+
+struct CanvasView: UIViewRepresentable {
+    @Binding var canvasView: PKCanvasView
+    var onDrawingChanged: (PKDrawing) -> Void
+    
+    func makeUIView(context: Context) -> PKCanvasView {
+        canvasView.tool = PKInkingTool(.pen, color: .black, width: 3)
+        canvasView.drawingPolicy = .anyInput
+        canvasView.delegate = context.coordinator
+        return canvasView
+    }
+    
+    func updateUIView(_ uiView: PKCanvasView, context: Context) {
+        // Updates handled by coordinator
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onDrawingChanged: onDrawingChanged)
+    }
+    
+    class Coordinator: NSObject, PKCanvasViewDelegate {
+        var onDrawingChanged: (PKDrawing) -> Void
+        
+        init(onDrawingChanged: @escaping (PKDrawing) -> Void) {
+            self.onDrawingChanged = onDrawingChanged
+        }
+        
+        func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            onDrawingChanged(canvasView.drawing)
+        }
+    }
+}
+
+// MARK: - ViewModel
+
+class CanvasViewModel: ObservableObject {
+    @Published var canvasView = PKCanvasView()
+    private let firebaseManager = FirebaseManager.shared
+    private var lastStrokeCount = 0
+    
+    func startObserving() {
+        firebaseManager.observeDrawingStrokes { stroke in
+            // Don't add our own strokes back
+            if stroke.userId != self.getUserId() {
+                self.addRemoteStroke(stroke)
+            }
+        }
+    }
+    
+    func handleDrawingChange(_ drawing: PKDrawing, userId: String) {
+        let currentStrokeCount = drawing.strokes.count
+        
+        // Only sync new strokes
+        if currentStrokeCount > lastStrokeCount {
+            let newStrokes = Array(drawing.strokes[lastStrokeCount...])
+            
+            for pkStroke in newStrokes {
+                let points = pkStroke.path.map { $0.location }
+                let color = pkStroke.ink.color
+                let colorHex = color.toHex()
+                let width = pkStroke.path.count > 0 ? Double(pkStroke.path[0].size.width) : 3.0
+                
+                let stroke = DrawingStroke(
+                    points: points,
+                    colorHex: colorHex,
+                    width: width,
+                    userId: userId
+                )
+                
+                firebaseManager.sendDrawingStroke(stroke: stroke)
+            }
+        }
+        
+        lastStrokeCount = currentStrokeCount
+    }
+    
+    func setColor(_ color: Color) {
+        let uiColor = UIColor(color)
+        canvasView.tool = PKInkingTool(.pen, color: uiColor, width: 3)
+    }
+    
+    private func addRemoteStroke(_ stroke: DrawingStroke) {
+        // Convert stroke data back to PKStroke
+        guard let color = UIColor(hex: stroke.colorHex) else { return }
+        
+        var path = PKStrokePath(controlPoints: [], creationDate: Date())
+        
+        for (index, point) in stroke.points.enumerated() {
+            let controlPoint = PKStrokePoint(
+                location: point,
+                timeOffset: TimeInterval(index) * 0.01,
+                size: CGSize(width: stroke.width, height: stroke.width),
+                opacity: 1.0,
+                force: 1.0,
+                azimuth: 0,
+                altitude: 0
+            )
+            path = PKStrokePath(controlPoints: path.map { $0 } + [controlPoint], creationDate: Date())
+        }
+        
+        let ink = PKInk(.pen, color: color)
+        let pkStroke = PKStroke(ink: ink, path: path)
+        
+        var drawing = canvasView.drawing
+        drawing.strokes.append(pkStroke)
+        canvasView.drawing = drawing
+        lastStrokeCount = drawing.strokes.count
+    }
+    
+    private func getUserId() -> String {
+        // In production, use actual user ID
+        return "current-user"
+    }
+}
+
+// MARK: - Color Options
+
+struct ColorOption: Hashable {
+    let color: Color
+    
+    static let allColors: [ColorOption] = [
+        ColorOption(color: .black),
+        ColorOption(color: .red),
+        ColorOption(color: .blue),
+        ColorOption(color: .green),
+        ColorOption(color: .yellow),
+        ColorOption(color: .orange),
+        ColorOption(color: .purple),
+        ColorOption(color: .pink),
+        ColorOption(color: .brown),
+        ColorOption(color: .gray),
+        ColorOption(color: .cyan),
+        ColorOption(color: .mint)
+    ]
+}
+
+// MARK: - Extensions
+
+extension UIColor {
+    func toHex() -> String {
+        var r: CGFloat = 0
+        var g: CGFloat = 0
+        var b: CGFloat = 0
+        var a: CGFloat = 0
+        
+        getRed(&r, green: &g, blue: &b, alpha: &a)
+        
+        return String(format: "#%02X%02X%02X", Int(r * 255), Int(g * 255), Int(b * 255))
+    }
+    
+    convenience init?(hex: String) {
+        let r, g, b: CGFloat
+        
+        if hex.hasPrefix("#") {
+            let start = hex.index(hex.startIndex, offsetBy: 1)
+            let hexColor = String(hex[start...])
+            
+            if hexColor.count == 6 {
+                let scanner = Scanner(string: hexColor)
+                var hexNumber: UInt64 = 0
+                
+                if scanner.scanHexInt64(&hexNumber) {
+                    r = CGFloat((hexNumber & 0xff0000) >> 16) / 255
+                    g = CGFloat((hexNumber & 0x00ff00) >> 8) / 255
+                    b = CGFloat(hexNumber & 0x0000ff) / 255
+                    
+                    self.init(red: r, green: g, blue: b, alpha: 1.0)
+                    return
+                }
+            }
+        }
+        
+        return nil
+    }
+}
+
+#Preview {
+    DrawingCanvasView()
+}
+
+

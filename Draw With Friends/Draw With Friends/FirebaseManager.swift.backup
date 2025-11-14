@@ -1,0 +1,171 @@
+//
+//  FirebaseManager.swift
+//  Draw With Friends
+//
+//  Created by Jamie on 09/11/2025.
+//
+
+import Foundation
+import Combine
+import FirebaseCore
+import FirebaseDatabase
+
+class FirebaseManager: ObservableObject {
+    static let shared = FirebaseManager()
+    private var database: DatabaseReference
+    
+    @Published var isConnected = false
+    @Published var currentRoomCode: String?
+    
+    private init() {
+        // Initialize Firebase if not already done
+        if FirebaseApp.app() == nil {
+            FirebaseApp.configure()
+        }
+        
+        database = Database.database().reference()
+        
+        // Monitor connection status
+        let connectedRef = Database.database().reference(withPath: ".info/connected")
+        connectedRef.observe(.value) { snapshot in
+            if let connected = snapshot.value as? Bool {
+                self.isConnected = connected
+            }
+        }
+    }
+    
+    // MARK: - Room Management
+    
+    func createRoom(completion: @escaping (String?) -> Void) {
+        // Generate a random 6-digit room code
+        let roomCode = String(format: "%06d", Int.random(in: 0...999999))
+        
+        let roomRef = database.child("rooms").child(roomCode)
+        
+        // Create room with metadata
+        let roomData: [String: Any] = [
+            "createdAt": ServerValue.timestamp(),
+            "isActive": true
+        ]
+        
+        roomRef.setValue(roomData) { error, _ in
+            if error == nil {
+                self.currentRoomCode = roomCode
+                completion(roomCode)
+            } else {
+                completion(nil)
+            }
+        }
+    }
+    
+    func joinRoom(code: String, completion: @escaping (Bool) -> Void) {
+        let roomRef = database.child("rooms").child(code)
+        
+        // Check if room exists
+        roomRef.observeSingleEvent(of: .value) { snapshot in
+            if snapshot.exists() {
+                self.currentRoomCode = code
+                completion(true)
+            } else {
+                completion(false)
+            }
+        }
+    }
+    
+    // MARK: - Drawing Data Sync
+    
+    func sendDrawingStroke(stroke: DrawingStroke) {
+        guard let roomCode = currentRoomCode else { return }
+        
+        let strokeRef = database.child("rooms").child(roomCode).child("strokes").childByAutoId()
+        
+        let strokeData: [String: Any] = [
+            "points": stroke.points.map { ["x": $0.x, "y": $0.y] },
+            "color": stroke.colorHex,
+            "width": stroke.width,
+            "timestamp": ServerValue.timestamp(),
+            "userId": stroke.userId
+        ]
+        
+        strokeRef.setValue(strokeData)
+    }
+    
+    func observeDrawingStrokes(completion: @escaping (DrawingStroke) -> Void) {
+        guard let roomCode = currentRoomCode else { return }
+        
+        let strokesRef = database.child("rooms").child(roomCode).child("strokes")
+        
+        strokesRef.observe(.childAdded) { snapshot in
+            if let data = snapshot.value as? [String: Any],
+               let pointsData = data["points"] as? [[String: Double]],
+               let colorHex = data["color"] as? String,
+               let width = data["width"] as? Double,
+               let userId = data["userId"] as? String {
+                
+                let points = pointsData.compactMap { pointDict -> CGPoint? in
+                    guard let x = pointDict["x"], let y = pointDict["y"] else { return nil }
+                    return CGPoint(x: x, y: y)
+                }
+                
+                let stroke = DrawingStroke(
+                    points: points,
+                    colorHex: colorHex,
+                    width: width,
+                    userId: userId
+                )
+                
+                completion(stroke)
+            }
+        }
+    }
+    
+    func clearCanvas() {
+        guard let roomCode = currentRoomCode else { return }
+        
+        let strokesRef = database.child("rooms").child(roomCode).child("strokes")
+        strokesRef.removeValue()
+    }
+    
+    func leaveRoom() {
+        currentRoomCode = nil
+    }
+}
+
+// MARK: - Data Models
+
+struct DrawingStroke: Identifiable, Codable {
+    let id: UUID
+    let points: [CGPoint]
+    let colorHex: String
+    let width: Double
+    let userId: String
+    
+    init(points: [CGPoint], colorHex: String, width: Double, userId: String) {
+        self.id = UUID()
+        self.points = points
+        self.colorHex = colorHex
+        self.width = width
+        self.userId = userId
+    }
+}
+
+extension CGPoint: Codable {
+    enum CodingKeys: String, CodingKey {
+        case x, y
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let x = try container.decode(CGFloat.self, forKey: .x)
+        let y = try container.decode(CGFloat.self, forKey: .y)
+        self.init(x: x, y: y)
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(x, forKey: .x)
+        try container.encode(y, forKey: .y)
+    }
+}
+
+

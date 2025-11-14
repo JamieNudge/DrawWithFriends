@@ -1,0 +1,12 @@
+{
+  "rules": {
+    "rooms": {
+      "$roomCode": {
+        ".read": true,
+        ".write": true
+      }
+    }
+  }
+}
+
+

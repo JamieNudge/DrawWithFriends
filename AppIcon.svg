@@ -1,0 +1,52 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Purple/Mauve gradient background -->
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#A855F7;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#9333EA;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Rounded rectangle background -->
+  <rect width="1024" height="1024" rx="220" fill="url(#bgGradient)"/>
+  
+  <!-- Red Pencil (left) -->
+  <g transform="translate(280, 512) rotate(-25)">
+    <rect x="-35" y="-250" width="70" height="450" rx="10" fill="#EF4444"/>
+    <rect x="-35" y="-270" width="70" height="20" fill="#FBBF24"/>
+    <rect x="-35" y="-310" width="70" height="40" rx="8" fill="#FCA5A5"/>
+    <path d="M -35 200 L 0 250 L 35 200 Z" fill="#DC2626"/>
+    <path d="M -10 250 L 0 275 L 10 250 Z" fill="#1F2937"/>
+    <rect x="10" y="-200" width="15" height="350" rx="7" fill="#FFFFFF" opacity="0.25"/>
+  </g>
+  
+  <!-- Yellow Pencil (center left) -->
+  <g transform="translate(420, 512) rotate(-10)">
+    <rect x="-35" y="-270" width="70" height="470" rx="10" fill="#FBBF24"/>
+    <rect x="-35" y="-290" width="70" height="20" fill="#94A3B8"/>
+    <rect x="-35" y="-330" width="70" height="40" rx="8" fill="#FCA5A5"/>
+    <path d="M -35 200 L 0 250 L 35 200 Z" fill="#F59E0B"/>
+    <path d="M -10 250 L 0 275 L 10 250 Z" fill="#1F2937"/>
+    <rect x="10" y="-220" width="15" height="370" rx="7" fill="#FFFFFF" opacity="0.25"/>
+  </g>
+  
+  <!-- Blue Pencil (center right) -->
+  <g transform="translate(604, 512) rotate(10)">
+    <rect x="-35" y="-270" width="70" height="470" rx="10" fill="#3B82F6"/>
+    <rect x="-35" y="-290" width="70" height="20" fill="#FBBF24"/>
+    <rect x="-35" y="-330" width="70" height="40" rx="8" fill="#FCA5A5"/>
+    <path d="M -35 200 L 0 250 L 35 200 Z" fill="#2563EB"/>
+    <path d="M -10 250 L 0 275 L 10 250 Z" fill="#1F2937"/>
+    <rect x="10" y="-220" width="15" height="370" rx="7" fill="#FFFFFF" opacity="0.25"/>
+  </g>
+  
+  <!-- Green Pencil (right) -->
+  <g transform="translate(744, 512) rotate(25)">
+    <rect x="-35" y="-250" width="70" height="450" rx="10" fill="#10B981"/>
+    <rect x="-35" y="-270" width="70" height="20" fill="#FBBF24"/>
+    <rect x="-35" y="-310" width="70" height="40" rx="8" fill="#FCA5A5"/>
+    <path d="M -35 200 L 0 250 L 35 200 Z" fill="#059669"/>
+    <path d="M -10 250 L 0 275 L 10 250 Z" fill="#1F2937"/>
+    <rect x="10" y="-200" width="15" height="350" rx="7" fill="#FFFFFF" opacity="0.25"/>
+  </g>
+</svg>
