@@ -76,10 +76,10 @@ body{
 
 /* Modal */
 .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(1,6,12,0.55);z-index:40}
-.modal[aria-hidden:"false"]{display:flex}
+.modal[aria-hidden="false"]{display:flex}
 .modal-panel{background:linear-gradient(180deg,#071426,#071316);padding:20px;border-radius:12px;min-width:320px;max-width:520px;border:1px solid rgba(255,255,255,0.03)}
 .modal-close{float:right;background:transparent;border:0;color:var(--muted);font-size:18px}
-input[type:"text"], input{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:rgba(255,255,255,0.02);color:inherit;margin:8px 0 12px}
+input[type="text"], input{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:rgba(255,255,255,0.02);color:inherit;margin:8px 0 12px}
 
 /* Responsive */
 @media (max-width:900px){
