@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>DrawWithFriends — Collaborative drawing made simple</title>
+  <meta name="description" content="DrawWithFriends — create quick drawing rooms and sketch together in real time with friends. No installs required." />
+  <link rel="stylesheet" href="styles.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="brand">
+        <svg class="logo" width="40" height="40" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="2" y="2" width="20" height="20" rx="4" fill="currentColor"></rect>
+        </svg>
+        <span class="site-title">DrawWithFriends</span>
+      </div>
+      <nav class="nav">
+        <a class="nav-link" href="support.html">Support</a>
+        <a class="nav-link" href="privacy.html">Privacy</a>
+        <button id="openModal" class="btn btn-primary">Create / Join</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-inner">
+        <div class="hero-copy">
+          <h1>Sketch together — instantly.</h1>
+          <p>Create a private drawing room, invite friends, and collaborate in real time. Fast, lightweight, and browser-first.</p>
+          <div class="hero-cta">
+            <button id="createRoom" class="btn btn-primary">Create a room</button>
+            <a href="#features" class="btn btn-ghost">View features</a>
+          </div>
+        </div>
+
+        <div class="hero-preview" aria-hidden="true">
+          <div class="canvas-mock">
+            <div class="tools">Pen • Eraser • Colors • Undo</div>
+            <svg viewBox="0 0 300 160" class="sketch" role="img" aria-label="sample sketch">
+              <rect x="0" y="0" width="300" height="160" fill="#fff" rx="6"></rect>
+              <path d="M20 110 C 60 40, 120 150, 170 70" stroke="#ff7b7b" stroke-width="3" fill="none" stroke-linecap="round"></path>
+              <circle cx="240" cy="40" r="16" fill="#58a6ff" opacity="0.95"></circle>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="features container">
+      <h2>Features</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Instant rooms</h3>
+          <p>Create a link and share — no sign-up required for quick sessions.</p>
+        </article>
+        <article class="card">
+          <h3>Live collaboration</h3>
+          <p>Everyone sees edits in real time — ideal for brainstorming, games, or casual drawing.</p>
+        </article>
+        <article class="card">
+          <h3>Simple toolset</h3>
+          <p>Focused tools: pen, eraser, color palette and undo — nothing extra to slow you down.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="signup container">
+      <div class="signup-inner">
+        <div>
+          <h2>Try a demo room</h2>
+          <p>No account needed. Create a room and invite one or many friends.</p>
+        </div>
+        <div class="signup-actions">
+          <button id="demoBtn" class="btn btn-secondary">Open demo</button>
+          <button id="openModalFooter" class="btn btn-outline">Create / Join</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p>© <span id="year"></span> DrawWithFriends — built by <strong>JamieNudge</strong></p>
+      <p><a href="https://github.com/JamieNudge/DrawWithFriends" target="_blank" rel="noopener">Repository</a></p>
+    </div>
+  </footer>
+
+  <!-- Modal -->
+  <div id="modal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-panel" role="document">
+      <button id="closeModal" class="modal-close" aria-label="Close">✕</button>
+      <h3>Create or join a room</h3>
+      <form id="roomForm">
+        <label for="roomName">Room name</label>
+        <input id="roomName" name="roomName" placeholder="eg. friday-sketch" autocomplete="off" />
+        <div class="form-row">
+          <button type="submit" class="btn btn-primary">Create</button>
+          <button id="joinBtn" type="button" class="btn btn-ghost">Join</button>
+        </div>
+      </form>
+      <p class="muted">This is a frontend shell. Replace alerts with navigation and hook up your backend or WebSocket server to open real rooms.</p>
+    </div>
+  </div>
+
+  <script>
+  // Minimal interactions (frontend-only)
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('year').textContent = new Date().getFullYear();
+
+    const modal = document.getElementById('modal');
+    const openModalBtns = [document.getElementById('openModal'), document.getElementById('openModalFooter')];
+    const closeModalBtn = document.getElementById('closeModal');
+    const demoBtn = document.getElementById('demoBtn');
+    const createRoomBtn = document.getElementById('createRoom');
+
+    function showModal(){ modal.setAttribute('aria-hidden','false'); const i = modal.querySelector('input, button'); if(i) i.focus(); }
+    function hideModal(){ modal.setAttribute('aria-hidden','true'); }
+
+    openModalBtns.forEach(b => b?.addEventListener('click', showModal));
+    closeModalBtn?.addEventListener('click', hideModal);
+    modal?.addEventListener('click', (e) => { if (e.target === modal) hideModal(); });
+
+    document.getElementById('roomForm')?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const name = document.getElementById('roomName').value.trim() || ('room-' + Math.random().toString(36).slice(2,8));
+      alert('Room created: ' + name + '\n\nHook this up to your backend to proceed.');
+      hideModal();
+    });
+
+    document.getElementById('joinBtn')?.addEventListener('click', () => {
+      const name = document.getElementById('roomName').value.trim();
+      if (!name) { alert('Please enter a room name to join.'); return; }
+      alert('Joining room: ' + name + '\n\nReplace with real join logic.');
+      hideModal();
+    });
+
+    demoBtn?.addEventListener('click', () => {
+      alert('Demo room (frontend-only). Replace with a real demo route.');
+    });
+
+    createRoomBtn?.addEventListener('click', () => {
+      const quick = 'demo-' + Math.random().toString(36).slice(2,6);
+      alert('Created quick room: ' + quick + '\n\nIntegrate with your backend to open a collaborative canvas.');
+    });
+  });
+  </script>
+</body>
+</html>
