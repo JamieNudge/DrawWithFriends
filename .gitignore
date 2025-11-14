@@ -1,0 +1,15 @@
+# Firebase Configuration (contains API keys)
+**/GoogleService-Info.plist
+
+# Xcode
+**/.DS_Store
+**/*.xcuserstate
+**/xcuserdata/
+**/*.xcworkspace/xcuserdata/
+DerivedData/
+
+# Backup files
+*.backup
+*.backup2
+*.backup3
+*.backup4
