@@ -36,9 +36,11 @@ struct DrawingCanvasView: View {
         case pencil
         case brush
         case spray
+        case eraser
     }
     @State private var selectedTool: ToolType = .pencil
     @State private var lineWidth: CGFloat = 5
+    @State private var allowOthersToErase = false // Toggle for eraser permissions
     
     // MARK: - Toolbar View
     private var toolbarView: some View {
@@ -64,6 +66,9 @@ struct DrawingCanvasView: View {
                     ToolButton(icon: "paintbrush.pointed", isActive: selectedTool == .spray) { 
                         selectedTool = .spray
                     }
+                    ToolButton(icon: "eraser.fill", isActive: selectedTool == .eraser) { 
+                        selectedTool = .eraser
+                    }
                 }
                 
                 // Thickness slider
@@ -81,6 +86,23 @@ struct DrawingCanvasView: View {
             }
             
             HStack(spacing: 16) {
+                // Eraser permissions toggle (only show when eraser is selected)
+                if selectedTool == .eraser {
+                    Button(action: {
+                        allowOthersToErase.toggle()
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: allowOthersToErase ? "lock.open" : "lock")
+                            Text(allowOthersToErase ? "Others Can Erase" : "Protected")
+                                .font(.caption)
+                        }
+                        .foregroundColor(.white)
+                        .padding(8)
+                        .background(allowOthersToErase ? Color.orange : Color.red)
+                        .clipShape(Capsule())
+                    }
+                }
+                
                 // Import photo button
                 PhotosPicker(selection: $selectedPhoto, matching: .images) {
                     Image(systemName: "photo.fill")
@@ -351,17 +373,41 @@ struct DrawingCanvasView: View {
                     VStack {
                         Text("Choose Color")
                             .font(.headline)
-                            .padding()
+                            .foregroundColor(.black)
+                            .padding(.top, 20)
                         
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 15) {
-                            ForEach(ColorOption.allColors, id: \.self) { colorOption in
+                        // Color wheel circular layout
+                        ZStack {
+                            // White in the center
+                            Circle()
+                                .fill(Color.white)
+                                .frame(width: 60, height: 60)
+                                .overlay(
+                                    Circle()
+                                        .stroke(selectedColor == .white ? Color.blue : Color.gray, lineWidth: 3)
+                                )
+                                .onTapGesture {
+                                    selectedColor = .white
+                                    canvasViewModel.setColor(.white)
+                                    showColorPicker = false
+                                }
+                            
+                            // Other colors arranged in a circle
+                            ForEach(Array(ColorOption.allColors.dropFirst().enumerated()), id: \.element) { index, colorOption in
+                                let angle = Double(index) * (360.0 / Double(ColorOption.allColors.count - 1))
+                                let radius: CGFloat = 100
+                                let x = radius * cos(angle * .pi / 180)
+                                let y = radius * sin(angle * .pi / 180)
+                                
                                 Circle()
                                     .fill(colorOption.color)
-                                    .frame(width: 50, height: 50)
+                                    .frame(width: 45, height: 45)
                                     .overlay(
                                         Circle()
-                                            .stroke(selectedColor == colorOption.color ? Color.white : Color.clear, lineWidth: 3)
+                                            .stroke(selectedColor == colorOption.color ? Color.blue : Color.white, lineWidth: 3)
                                     )
+                                    .shadow(radius: 2)
+                                    .offset(x: x, y: y)
                                     .onTapGesture {
                                         selectedColor = colorOption.color
                                         canvasViewModel.setColor(colorOption.color)
@@ -369,6 +415,7 @@ struct DrawingCanvasView: View {
                                     }
                             }
                         }
+                        .frame(width: 300, height: 300)
                         .padding()
                     }
                     .background(Color.white)
@@ -551,21 +598,28 @@ struct DrawingCanvasView: View {
     
     // Update the active PencilKit tool based on selected tool, color and thickness
     private func updateTool() {
-        let base = UIColor(selectedColor)
-        let inkType: PKInkingTool.InkType
-        let color: UIColor
-        switch selectedTool {
-        case .pencil:
-            inkType = .pencil
-            color = base
-        case .brush:
-            inkType = .pen  // Smooth, consistent strokes
-            color = base
-        case .spray:
-            inkType = .marker  // Semi-transparent, painterly
-            color = base.withAlphaComponent(0.35)
+        if selectedTool == .eraser {
+            // Use PKEraserTool for erasing
+            canvasViewModel.canvasView.tool = PKEraserTool(.bitmap)
+        } else {
+            let base = UIColor(selectedColor)
+            let inkType: PKInkingTool.InkType
+            let color: UIColor
+            switch selectedTool {
+            case .pencil:
+                inkType = .pencil
+                color = base
+            case .brush:
+                inkType = .pen  // Smooth, consistent strokes
+                color = base
+            case .spray:
+                inkType = .marker  // Semi-transparent, painterly
+                color = base.withAlphaComponent(0.35)
+            case .eraser:
+                fatalError("Eraser handled above")
+            }
+            canvasViewModel.canvasView.tool = PKInkingTool(inkType, color: color, width: max(1, lineWidth))
         }
-        canvasViewModel.canvasView.tool = PKInkingTool(inkType, color: color, width: max(1, lineWidth))
     }
 }
 
@@ -582,9 +636,9 @@ struct CanvasView: UIViewRepresentable {
         canvasView.drawingPolicy = .anyInput
         canvasView.delegate = context.coordinator
         
-        // Disable auto-zoom to prevent "empty space" around scaled drawings
-        canvasView.minimumZoomScale = 1.0
-        canvasView.maximumZoomScale = 1.0
+        // Enable zoom for detail work
+        canvasView.minimumZoomScale = 0.5  // Zoom out to 50%
+        canvasView.maximumZoomScale = 4.0  // Zoom in to 400%
         canvasView.zoomScale = 1.0
         
         // Transparent background so we can see images behind it
@@ -1434,6 +1488,7 @@ struct ColorOption: Hashable {
     let color: Color
     
     static let allColors: [ColorOption] = [
+        ColorOption(color: .white),  // WHITE ADDED!
         ColorOption(color: .black),
         ColorOption(color: .red),
         ColorOption(color: .blue),
