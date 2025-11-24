@@ -36,9 +36,12 @@ struct RoomView: View {
             VStack(spacing: 15) {
                 // Title
                 VStack(spacing: 8) {
-                    Image(systemName: "pencil.and.scribble")
-                        .font(.system(size: 60))
-                        .foregroundColor(.white)
+                    Image("AppIconImage")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 100, height: 100)
+                        .cornerRadius(20)
+                        .shadow(radius: 5)
                     
                     Text("Draw With Friends")
                         .font(.title)
