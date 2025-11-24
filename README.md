@@ -15,3 +15,6 @@ How to add to your repo
 Notes
 - These are frontend-only starter pages. Replace alerts in index.html with navigation and integrate a backend (Node/socket.io, serverless, or other) for real-time sync.
 - Update contact email and copy where needed.
+
+
+

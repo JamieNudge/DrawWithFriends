@@ -246,6 +246,46 @@ class FirebaseManager: ObservableObject {
         }
     }
     
+    // MARK: - Background Image Sync
+    
+    func sendBackgroundImage(_ imageData: Data, userId: String) {
+        guard let roomCode = currentRoomCode else { return }
+        
+        let backgroundRef = database.child("rooms").child(roomCode).child("backgroundImage")
+        
+        let data: [String: Any] = [
+            "data": imageData.base64EncodedString(),
+            "userId": userId,
+            "timestamp": ServerValue.timestamp()
+        ]
+        
+        backgroundRef.setValue(data)
+    }
+    
+    func observeBackgroundImage(completion: @escaping (Data?, String?) -> Void) {
+        guard let roomCode = currentRoomCode else { return }
+        
+        let backgroundRef = database.child("rooms").child(roomCode).child("backgroundImage")
+        
+        backgroundRef.observe(.value) { snapshot in
+            if let data = snapshot.value as? [String: Any],
+               let base64String = data["data"] as? String,
+               let imageData = Data(base64Encoded: base64String) {
+                let userId = data["userId"] as? String
+                completion(imageData, userId)
+            } else {
+                completion(nil, nil)
+            }
+        }
+    }
+    
+    func clearBackgroundImage() {
+        guard let roomCode = currentRoomCode else { return }
+        
+        let backgroundRef = database.child("rooms").child(roomCode).child("backgroundImage")
+        backgroundRef.removeValue()
+    }
+    
     func clearCanvas() {
         guard let roomCode = currentRoomCode else { return }
         

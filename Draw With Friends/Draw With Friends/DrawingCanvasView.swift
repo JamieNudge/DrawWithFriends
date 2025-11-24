@@ -8,6 +8,7 @@
 import SwiftUI
 import Combine
 import PencilKit
+import PhotosUI
 
 struct DrawingCanvasView: View {
     @StateObject private var firebaseManager = FirebaseManager.shared
@@ -18,10 +19,16 @@ struct DrawingCanvasView: View {
     @State private var showSaveDialog = false
     @State private var showSavedDrawings = false
     @State private var showExportSuccess = false
+    @State private var showExportError = false
     @State private var drawingName = ""
     @State private var echoModeEnabled = false
     @State private var echoCount = 2 // Number of echo copies (2 = 2 echoes + 1 original = 3 total), 0 = infinite
     @State private var showDiagnostics = false
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var backgroundImage: UIImage?
+    @State private var showCopiedConfirmation = false
+    @State private var showPhotoSharingWarning = false
+    @State private var pendingPhotoItem: PhotosPickerItem?
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     // Drawing tool state
@@ -74,6 +81,40 @@ struct DrawingCanvasView: View {
             }
             
             HStack(spacing: 16) {
+                // Import photo button
+                PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                    Image(systemName: "photo.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 50, height: 50)
+                        .background(
+                            LinearGradient(
+                                colors: [Color.green, Color.teal],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .clipShape(Circle())
+                        .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
+                }
+                
+                // Export button in toolbar
+                Button(action: exportAsImage) {
+                    Image(systemName: "square.and.arrow.up.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 50, height: 50)
+                        .background(
+                            LinearGradient(
+                                colors: [Color.blue, Color.purple],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .clipShape(Circle())
+                        .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
+                }
+                
                 Button(action: {
                     if canvasViewModel.canvasView.drawing.strokes.count > 0 {
                         var drawing = canvasViewModel.canvasView.drawing
@@ -193,6 +234,9 @@ struct DrawingCanvasView: View {
                 
                 // Room controls row
                 HStack {
+                    // Diagnostics button (top-left)
+                    DiagnosticsToggleButton(isShowing: $showDiagnostics)
+                    
                     if let roomCode = firebaseManager.currentRoomCode {
                         HStack {
                             Text("Room: \(roomCode)")
@@ -208,6 +252,12 @@ struct DrawingCanvasView: View {
                             
                             Button(action: {
                                 UIPasteboard.general.string = roomCode
+                                showCopiedConfirmation = true
+                                
+                                // Hide confirmation after 2 seconds
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                    showCopiedConfirmation = false
+                                }
                             }) {
                                 Image(systemName: "doc.on.doc")
                                     .font(.caption)
@@ -246,18 +296,33 @@ struct DrawingCanvasView: View {
             
             // CANVAS - Takes up remaining space
             GeometryReader { geometry in
-                CanvasView(
-                    canvasView: $canvasViewModel.canvasView,
-                    onDrawingChanged: { drawing in
-                        canvasViewModel.handleDrawingChange(drawing)
-                    },
-                    onDrawingStarted: {
-                        canvasViewModel.handleDrawingStarted()
-                    },
-                    onDrawingEnded: {
-                        canvasViewModel.handleDrawingEnded()
+                ZStack {
+                    // Default light background
+                    Color(white: 0.98)
+                    
+                    // Background image if selected
+                    if let backgroundImage = backgroundImage {
+                        Image(uiImage: backgroundImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .clipped()
                     }
-                )
+                    
+                    // Drawing canvas on top
+                    CanvasView(
+                        canvasView: $canvasViewModel.canvasView,
+                        onDrawingChanged: { drawing in
+                            canvasViewModel.handleDrawingChange(drawing)
+                        },
+                        onDrawingStarted: {
+                            canvasViewModel.handleDrawingStarted()
+                        },
+                        onDrawingEnded: {
+                            canvasViewModel.handleDrawingEnded()
+                        }
+                    )
+                }
                 .onAppear {
                     canvasViewModel.currentCanvasSize = geometry.size
                 }
@@ -322,19 +387,60 @@ struct DrawingCanvasView: View {
                 .transition(.move(edge: .top))
             }
             
-            // Diagnostics toggle button (always visible)
-            VStack {
-                Spacer()
-                HStack {
+            // Copied confirmation toast
+            if showCopiedConfirmation {
+                VStack {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.white)
+                        Text("Room code copied!")
+                            .foregroundColor(.white)
+                            .fontWeight(.semibold)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(Color.green)
+                    .cornerRadius(25)
+                    .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
+                    .padding(.top, 100)
+                    
                     Spacer()
-                    DiagnosticsToggleButton(isShowing: $showDiagnostics)
-                        .padding()
                 }
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.spring(), value: showCopiedConfirmation)
             }
+            
         }
         .onAppear {
             canvasViewModel.startObserving()
             updateTool()
+            
+            // Observe background images from other users
+            firebaseManager.observeBackgroundImage { imageData, userId in
+                // Only apply if it's from another user (not myself)
+                if let imageData = imageData,
+                   userId != UserSession.shared.userId,
+                   let image = UIImage(data: imageData) {
+                    DispatchQueue.main.async {
+                        self.backgroundImage = image
+                    }
+                }
+            }
+        }
+        .onChange(of: selectedPhoto) { newPhoto in
+            if let newPhoto = newPhoto {
+                // Check if user has seen the warning before
+                let hasSeenWarning = UserDefaults.standard.bool(forKey: "hasSeenPhotoSharingWarning")
+                
+                if hasSeenWarning {
+                    // Proceed directly
+                    loadAndSharePhoto(newPhoto)
+                } else {
+                    // Show warning first
+                    pendingPhotoItem = newPhoto
+                    showPhotoSharingWarning = true
+                }
+            }
         }
         .sheet(isPresented: $showSavedDrawings) {
             SavedDrawingsView { drawing in
@@ -357,6 +463,35 @@ struct DrawingCanvasView: View {
         } message: {
             Text("Drawing saved to Photos")
         }
+        .alert("Export Failed", isPresented: $showExportError) {
+            Button("OK", role: .cancel) { }
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+        } message: {
+            Text("Unable to save to Photos. Please check app permissions in Settings.")
+        }
+        .alert("Share Photo with Room?", isPresented: $showPhotoSharingWarning) {
+            Button("Cancel", role: .cancel) {
+                // Clear the pending photo
+                pendingPhotoItem = nil
+                selectedPhoto = nil
+            }
+            Button("Share") {
+                // Save preference so they don't see this again
+                UserDefaults.standard.set(true, forKey: "hasSeenPhotoSharingWarning")
+                
+                // Proceed with loading the photo
+                if let pending = pendingPhotoItem {
+                    loadAndSharePhoto(pending)
+                }
+                pendingPhotoItem = nil
+            }
+        } message: {
+            Text("This photo will be uploaded to our servers and shared with everyone in your drawing room. Only import photos you're comfortable sharing.")
+        }
     }
     
     private func saveDrawing() {
@@ -365,14 +500,35 @@ struct DrawingCanvasView: View {
         drawingName = ""
     }
     
+    private func loadAndSharePhoto(_ photoItem: PhotosPickerItem) {
+        Task {
+            if let data = try? await photoItem.loadTransferable(type: Data.self),
+               let image = UIImage(data: data) {
+                backgroundImage = image
+                
+                // Compress and send to Firebase so others can see it
+                if let compressedData = image.jpegData(compressionQuality: 0.6) {
+                    firebaseManager.sendBackgroundImage(compressedData, userId: UserSession.shared.userId)
+                }
+            }
+        }
+    }
+    
     private func exportAsImage() {
-        guard let image = DrawingManager.shared.exportAsImage(canvasViewModel.canvasView.drawing) else {
+        guard let image = DrawingManager.shared.exportAsImage(
+            canvasViewModel.canvasView.drawing,
+            backgroundImage: backgroundImage,
+            canvasSize: canvasViewModel.currentCanvasSize
+        ) else {
+            showExportError = true
             return
         }
         
         DrawingManager.shared.saveToPhotos(image) { success in
             if success {
                 showExportSuccess = true
+            } else {
+                showExportError = true
             }
         }
     }
@@ -381,6 +537,10 @@ struct DrawingCanvasView: View {
         canvasViewModel.canvasView.drawing = PKDrawing()
         canvasViewModel.resetStrokeTracking() // Clear reconciliation data
         firebaseManager.clearCanvas()
+        
+        // Also clear background image
+        backgroundImage = nil
+        firebaseManager.clearBackgroundImage()
     }
     
     private func leaveRoom() {
@@ -427,8 +587,9 @@ struct CanvasView: UIViewRepresentable {
         canvasView.maximumZoomScale = 1.0
         canvasView.zoomScale = 1.0
         
-        // Subtle background to make letterboxing look intentional
-        canvasView.backgroundColor = UIColor(white: 0.98, alpha: 1.0)
+        // Transparent background so we can see images behind it
+        canvasView.backgroundColor = .clear
+        canvasView.isOpaque = false
         
         return canvasView
     }

@@ -9,6 +9,7 @@ import Foundation
 import Combine
 import PencilKit
 import UIKit
+import Photos
 
 class DrawingManager: ObservableObject {
     static let shared = DrawingManager()
@@ -71,14 +72,90 @@ class DrawingManager: ObservableObject {
     
     // MARK: - Export as Image
     
-    func exportAsImage(_ drawing: PKDrawing) -> UIImage? {
-        let image = drawing.image(from: drawing.bounds, scale: UIScreen.main.scale)
+    func exportAsImage(_ drawing: PKDrawing, backgroundImage: UIImage?, canvasSize: CGSize) -> UIImage? {
+        // Use canvas size if provided and valid, otherwise fall back to drawing bounds
+        let imageSize: CGSize
+        if canvasSize.width > 0 && canvasSize.height > 0 {
+            imageSize = canvasSize
+        } else if !drawing.bounds.isEmpty {
+            let padding: CGFloat = 20
+            imageSize = CGSize(
+                width: drawing.bounds.width + padding * 2,
+                height: drawing.bounds.height + padding * 2
+            )
+        } else {
+            // No drawing and no canvas size
+            return nil
+        }
+        
+        // Create composite image
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = UIScreen.main.scale
+        format.opaque = true
+        
+        let renderer = UIGraphicsImageRenderer(size: imageSize, format: format)
+        
+        let image = renderer.image { context in
+            // Fill with white background first
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: imageSize))
+            
+            // Draw background image if available
+            if let backgroundImage = backgroundImage {
+                backgroundImage.draw(in: CGRect(origin: .zero, size: imageSize))
+            }
+            
+            // Draw the PencilKit drawing on top
+            if !drawing.bounds.isEmpty {
+                let drawingImage = drawing.image(from: drawing.bounds, scale: UIScreen.main.scale)
+                drawingImage.draw(in: CGRect(origin: .zero, size: imageSize), blendMode: .normal, alpha: 1.0)
+            }
+        }
+        
         return image
     }
     
     func saveToPhotos(_ image: UIImage, completion: @escaping (Bool) -> Void) {
-        UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-        completion(true)
+        // Check authorization status first
+        let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+        
+        switch status {
+        case .authorized, .limited:
+            // Already authorized, save the image
+            performSave(image: image, completion: completion)
+            
+        case .notDetermined:
+            // Request authorization
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { newStatus in
+                DispatchQueue.main.async {
+                    if newStatus == .authorized || newStatus == .limited {
+                        self.performSave(image: image, completion: completion)
+                    } else {
+                        completion(false)
+                    }
+                }
+            }
+            
+        default:
+            // Denied or restricted
+            completion(false)
+        }
+    }
+    
+    private func performSave(image: UIImage, completion: @escaping (Bool) -> Void) {
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetChangeRequest.creationRequestForAsset(from: image)
+        }) { success, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("❌ Error saving to photos: \(error.localizedDescription)")
+                    completion(false)
+                } else {
+                    print("✅ Successfully saved to photos")
+                    completion(success)
+                }
+            }
+        }
     }
     
     // MARK: - Private Helpers
