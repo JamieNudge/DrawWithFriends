@@ -427,8 +427,10 @@ struct DrawingCanvasView: View {
             // Diagnostics overlay
             if showDiagnostics {
                 VStack {
-                    DiagnosticsView()
-                        .padding()
+                    DiagnosticsView(onDismiss: {
+                        showDiagnostics = false
+                    })
+                    .padding()
                     Spacer()
                 }
                 .transition(.move(edge: .top))

@@ -11,6 +11,7 @@ struct DiagnosticsView: View {
     @ObservedObject var diagnostics = DiagnosticsManager.shared
     @State private var showingFullLogs = false
     @State private var showCopyConfirmation = false
+    var onDismiss: (() -> Void)? = nil  // Callback to dismiss
     
     var body: some View {
         VStack(spacing: 0) {
@@ -41,6 +42,15 @@ struct DiagnosticsView: View {
                     Image(systemName: "arrow.clockwise.circle")
                         .font(.title3)
                         .foregroundColor(.orange)
+                }
+                
+                // CLOSE BUTTON
+                Button(action: {
+                    onDismiss?()
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.red)
                 }
             }
             .padding()
