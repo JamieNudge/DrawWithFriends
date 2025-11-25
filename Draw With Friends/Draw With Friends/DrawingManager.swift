@@ -72,7 +72,7 @@ class DrawingManager: ObservableObject {
     
     // MARK: - Export as Image
     
-    func exportAsImage(_ drawing: PKDrawing, backgroundImage: UIImage?, canvasSize: CGSize) -> UIImage? {
+    func exportAsImage(_ drawing: PKDrawing, backgroundImage: UIImage?, canvasSize: CGSize, transparentBackground: Bool = false) -> UIImage? {
         // Use canvas size if provided and valid, otherwise fall back to drawing bounds
         let imageSize: CGSize
         if canvasSize.width > 0 && canvasSize.height > 0 {
@@ -88,31 +88,45 @@ class DrawingManager: ObservableObject {
             return nil
         }
         
-        // Create composite image
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = UIScreen.main.scale
-        format.opaque = true
-        
-        let renderer = UIGraphicsImageRenderer(size: imageSize, format: format)
-        
-        let image = renderer.image { context in
-            // Fill with white background first
-            UIColor.white.setFill()
-            context.fill(CGRect(origin: .zero, size: imageSize))
-            
-            // Draw background image if available
-            if let backgroundImage = backgroundImage {
-                backgroundImage.draw(in: CGRect(origin: .zero, size: imageSize))
+        // For signature mode with transparency, use classic UIGraphics API for better alpha control
+        if transparentBackground {
+            UIGraphicsBeginImageContextWithOptions(imageSize, false, UIScreen.main.scale)
+            guard UIGraphicsGetCurrentContext() != nil else {
+                UIGraphicsEndImageContext()
+                return nil
             }
             
-            // Draw the PencilKit drawing on top
-            if !drawing.bounds.isEmpty {
-                let drawingImage = drawing.image(from: drawing.bounds, scale: UIScreen.main.scale)
-                drawingImage.draw(in: CGRect(origin: .zero, size: imageSize), blendMode: .normal, alpha: 1.0)
+            // Context is already transparent (opaque: false in beginImageContext)
+            // Render the drawing into the transparent context
+            let drawingImage = drawing.image(from: CGRect(origin: .zero, size: imageSize), scale: 1.0)
+            drawingImage.draw(in: CGRect(origin: .zero, size: imageSize))
+            
+            let image = UIGraphicsGetImageFromCurrentImageContext()
+            UIGraphicsEndImageContext()
+            return image
+        } else {
+            // Normal mode: use modern renderer
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = UIScreen.main.scale
+            format.opaque = true
+            
+            let renderer = UIGraphicsImageRenderer(size: imageSize, format: format)
+            
+            return renderer.image { context in
+                // White background
+                UIColor.white.setFill()
+                context.fill(CGRect(origin: .zero, size: imageSize))
+                
+                // Background image if available
+                if let backgroundImage = backgroundImage {
+                    backgroundImage.draw(in: CGRect(origin: .zero, size: imageSize))
+                }
+                
+                // Draw the PencilKit drawing
+                let drawingImage = drawing.image(from: CGRect(origin: .zero, size: imageSize), scale: UIScreen.main.scale)
+                drawingImage.draw(in: CGRect(origin: .zero, size: imageSize))
             }
         }
-        
-        return image
     }
     
     func saveToPhotos(_ image: UIImage, completion: @escaping (Bool) -> Void) {
