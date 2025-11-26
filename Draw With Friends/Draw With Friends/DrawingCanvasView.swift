@@ -50,6 +50,7 @@ struct DrawingCanvasView: View {
     @State private var isUndoRedoAction = false // Flag to prevent clearing redo stack during undo/redo
     @State private var lastStrokeCount = 0 // Track stroke count to detect new strokes
     @State private var drawingBeforeChange: PKDrawing? = nil // Snapshot before user starts drawing
+    @State private var drawingBeforeEcho: PKDrawing? = nil // Snapshot before echo mode was enabled
     
     // MARK: - Toolbar View
     private var toolbarView: some View {
@@ -76,6 +77,18 @@ struct DrawingCanvasView: View {
                     selectedTool = selectedTool == .spray ? .pencil : .spray
                 }
                 ToolButton(icon: "eraser.fill", isActive: selectedTool == .eraser) { 
+                    // If echo is on, turn it off first
+                    if echoModeEnabled {
+                        echoModeEnabled = false
+                        canvasViewModel.echoModeEnabled = false
+                        print("🔄 Auto-disabled echo to enable eraser")
+                        
+                        // Capture snapshot when echo turns off
+                        let currentDrawing = canvasViewModel.canvasView.drawing
+                        undoStack.removeAll()
+                        redoStack.removeAll()
+                    }
+                    
                     selectedTool = selectedTool == .eraser ? .pencil : .eraser
                 }
                 
@@ -97,10 +110,19 @@ struct DrawingCanvasView: View {
                         .frame(width: 25, alignment: .leading)
                 }
                 
-                // Undo button (disabled when echo is on due to async complexity)
+                // Undo button
                 Button(action: {
                     print("⏪ Undo tapped - stack: \(undoStack.count), receiving: \(canvasViewModel.isReceivingUpdate), echo: \(echoModeEnabled)")
-                    if !undoStack.isEmpty && !canvasViewModel.isReceivingUpdate && !echoModeEnabled {
+                    
+                    // If echo is on, turn it off first (but continue with undo)
+                    if echoModeEnabled {
+                        echoModeEnabled = false
+                        canvasViewModel.echoModeEnabled = false
+                        print("🔄 Auto-disabled echo to use undo")
+                        // Don't return - continue with undo operation
+                    }
+                    
+                    if !undoStack.isEmpty && !canvasViewModel.isReceivingUpdate {
                         isUndoRedoAction = true
                         canvasViewModel.isUndoRedoActive = true
                         
@@ -129,7 +151,7 @@ struct DrawingCanvasView: View {
                         print("⏪ Undo BLOCKED")
                     }
                 }) {
-                    let canUndo = !undoStack.isEmpty && !canvasViewModel.isReceivingUpdate && !echoModeEnabled
+                    let canUndo = !undoStack.isEmpty && !canvasViewModel.isReceivingUpdate
                     Image(systemName: "arrow.uturn.backward")
                         .font(.system(size: 16))
                         .foregroundColor(.white)
@@ -137,11 +159,19 @@ struct DrawingCanvasView: View {
                         .background(canUndo ? Color.blue : Color.gray.opacity(0.3))
                         .clipShape(Circle())
                 }
-                .disabled(undoStack.isEmpty || canvasViewModel.isReceivingUpdate || echoModeEnabled)
+                .disabled(undoStack.isEmpty || canvasViewModel.isReceivingUpdate)
                 
-                // Redo button (disabled when echo is on due to async complexity)
+                // Redo button
                 Button(action: {
-                    if !redoStack.isEmpty && !canvasViewModel.isReceivingUpdate && !echoModeEnabled {
+                    // If echo is on, turn it off first (but continue with redo)
+                    if echoModeEnabled {
+                        echoModeEnabled = false
+                        canvasViewModel.echoModeEnabled = false
+                        print("🔄 Auto-disabled echo to use redo")
+                        // Don't return - continue with redo operation
+                    }
+                    
+                    if !redoStack.isEmpty && !canvasViewModel.isReceivingUpdate {
                         isUndoRedoAction = true
                         canvasViewModel.isUndoRedoActive = true
                         
@@ -168,7 +198,7 @@ struct DrawingCanvasView: View {
                         }
                     }
                 }) {
-                    let canRedo = !redoStack.isEmpty && !canvasViewModel.isReceivingUpdate && !echoModeEnabled
+                    let canRedo = !redoStack.isEmpty && !canvasViewModel.isReceivingUpdate
                     Image(systemName: "arrow.uturn.forward")
                         .font(.system(size: 16))
                         .foregroundColor(.white)
@@ -176,7 +206,7 @@ struct DrawingCanvasView: View {
                         .background(canRedo ? Color.blue : Color.gray.opacity(0.3))
                         .clipShape(Circle())
                 }
-                .disabled(redoStack.isEmpty || canvasViewModel.isReceivingUpdate || echoModeEnabled)
+                .disabled(redoStack.isEmpty || canvasViewModel.isReceivingUpdate)
             }
             .padding(.horizontal, 8)
             
@@ -204,26 +234,35 @@ struct DrawingCanvasView: View {
                 
                 // Echo toggle
                 Button(action: {
+                    // If eraser is active, switch to pencil first
+                    if !echoModeEnabled && selectedTool == .eraser {
+                        selectedTool = .pencil
+                        print("🔄 Auto-switched from eraser to pencil to enable echo")
+                    }
+                    
                     let wasEchoOn = echoModeEnabled
                     echoModeEnabled.toggle()
                     canvasViewModel.echoModeEnabled = echoModeEnabled
                     canvasViewModel.echoCount = echoCount
                     canvasViewModel.logEchoStateChange()
                     
-                    // When turning echo ON: Rebuild tracking from current canvas and clear undo/redo
+                    // When turning echo ON: Save current state, clear undo/redo, and rebuild tracking
                     if echoModeEnabled {
-                        print("🔊 Echo ON - rebuilding tracking from current canvas and clearing undo/redo stacks")
+                        print("🔊 Echo ON - saving pre-echo state, clearing undo/redo, and rebuilding tracking")
+                        drawingBeforeEcho = canvasViewModel.canvasView.drawing
                         canvasViewModel.rebuildTrackingFromCurrentCanvas()
+                        
+                        // Clear undo/redo stacks to prevent conflicts with echo tracking
                         undoStack.removeAll()
                         redoStack.removeAll()
                     }
                     
-                    // When turning echo OFF: Take a snapshot of current state as new starting point
+                    // When turning echo OFF: Keep undo stack intact so user can undo echo strokes
                     if !echoModeEnabled && wasEchoOn {
-                        print("🔊 Echo OFF - capturing current state as new baseline")
-                        undoStack.removeAll()
+                        print("🔊 Echo OFF - undo stack preserved (size: \(undoStack.count))")
+                        // Clear redo stack only
                         redoStack.removeAll()
-                        // Next drawing will create first undo point
+                        drawingBeforeEcho = nil
                     }
                 }) {
                     Image(systemName: echoModeEnabled ? "waveform.path" : "waveform.path.badge.minus")
@@ -425,28 +464,44 @@ struct DrawingCanvasView: View {
                         },
                         onDrawingStarted: {
                             // Save current drawing state before user makes changes
-                            // BUT NOT during Firebase rebuilds/syncs OR when echo mode is on OR during undo/redo
-                            if !isUndoRedoAction && !canvasViewModel.isReceivingUpdate && !echoModeEnabled {
+                            // BUT NOT during Firebase rebuilds/syncs OR during undo/redo
+                            // We DO capture when echo is on (we'll save after the rebuild completes)
+                            if !isUndoRedoAction && !canvasViewModel.isReceivingUpdate {
                                 drawingBeforeChange = canvasViewModel.canvasView.drawing
                                 print("💾 Undo: Captured snapshot (\(canvasViewModel.canvasView.drawing.strokes.count) strokes)")
                             } else {
-                                print("💾 Undo: SKIPPED snapshot - isUndoRedo: \(isUndoRedoAction), isReceiving: \(canvasViewModel.isReceivingUpdate), echoOn: \(echoModeEnabled)")
+                                print("💾 Undo: SKIPPED snapshot - isUndoRedo: \(isUndoRedoAction), isReceiving: \(canvasViewModel.isReceivingUpdate)")
                             }
                             canvasViewModel.handleDrawingStarted()
                         },
                         onDrawingEnded: {
                             // After drawing ends, save the "before" state to undo stack
-                            // BUT NOT during Firebase rebuilds/syncs OR when echo mode is on
-                            if !isUndoRedoAction && !canvasViewModel.isReceivingUpdate && !echoModeEnabled,
+                            // BUT NOT during Firebase rebuilds/syncs
+                            // If echo is on, wait for rebuild to complete before saving
+                            if !isUndoRedoAction && !canvasViewModel.isReceivingUpdate,
                                let beforeDrawing = drawingBeforeChange {
-                                undoStack.append(beforeDrawing)
-                                redoStack.removeAll()
-                                if undoStack.count > 50 {
-                                    undoStack.removeFirst()
+                                
+                                if echoModeEnabled {
+                                    // Wait for echo rebuild to complete (0.3s), then save snapshot
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                        self.undoStack.append(beforeDrawing)
+                                        self.redoStack.removeAll()
+                                        if self.undoStack.count > 50 {
+                                            self.undoStack.removeFirst()
+                                        }
+                                        print("💾 Undo: Saved to stack after echo rebuild (stack size: \(self.undoStack.count))")
+                                    }
+                                } else {
+                                    // No echo, save immediately
+                                    undoStack.append(beforeDrawing)
+                                    redoStack.removeAll()
+                                    if undoStack.count > 50 {
+                                        undoStack.removeFirst()
+                                    }
+                                    print("💾 Undo: Saved to stack (stack size: \(undoStack.count))")
                                 }
-                                print("💾 Undo: Saved to stack (stack size: \(undoStack.count))")
                             } else {
-                                print("💾 Undo: SKIPPED - isUndoRedo: \(isUndoRedoAction), isReceiving: \(canvasViewModel.isReceivingUpdate), echoOn: \(echoModeEnabled), hasSnapshot: \(drawingBeforeChange != nil)")
+                                print("💾 Undo: SKIPPED - isUndoRedo: \(isUndoRedoAction), isReceiving: \(canvasViewModel.isReceivingUpdate), hasSnapshot: \(drawingBeforeChange != nil)")
                             }
                             drawingBeforeChange = nil
                             canvasViewModel.handleDrawingEnded()
