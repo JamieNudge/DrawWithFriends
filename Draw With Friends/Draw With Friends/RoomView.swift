@@ -34,25 +34,27 @@ struct RoomView: View {
             .ignoresSafeArea()
             
             VStack(spacing: 15) {
-                // Title
+                // Title - shrink when keyboard appears
                 VStack(spacing: 8) {
                     Image("AppIconImage")
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 100, height: 100)
+                        .frame(width: isRoomCodeFocused ? 60 : 100, height: isRoomCodeFocused ? 60 : 100)
                         .cornerRadius(20)
                         .shadow(radius: 5)
                     
-                    Text("Draw With Friends")
-                        .font(.title)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                    
-                    Text("Collaborate in real-time!")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.9))
+                    if !isRoomCodeFocused {
+                        Text("Draw With Friends")
+                            .font(.title)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                        
+                        Text("Collaborate in real-time!")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.9))
+                    }
                 }
-                .padding(.top, 30)
+                .padding(.top, isRoomCodeFocused ? 10 : 30)
                 
                 // Room controls
                 VStack(spacing: 12) {
@@ -152,7 +154,18 @@ struct RoomView: View {
                 .padding(.horizontal, 30)
                 .padding(.bottom, 10)
                 
-                Spacer()
+                Spacer(minLength: 0)
+            }
+            .animation(.easeInOut(duration: 0.3), value: isRoomCodeFocused)
+            
+            // Tap anywhere to dismiss keyboard
+            if isRoomCodeFocused {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        isRoomCodeFocused = false
+                    }
+                    .ignoresSafeArea()
             }
         }
         .alert("Room Status", isPresented: $showAlert) {
@@ -225,17 +238,28 @@ struct RoomCodeInputView: View {
     var body: some View {
         VStack(spacing: 10) {
             ZStack(alignment: .trailing) {
-                TextField("Enter Room Code", text: $roomCode)
-                    .keyboardType(.numberPad)
-                    .font(.title3)
-                    .multilineTextAlignment(.center)
-                    .padding(12)
-                    .padding(.trailing, 40) // Space for clear button
-                    .background(Color.white)
-                    .cornerRadius(10)
-                    .focused($isRoomCodeFocused)
-                    .autocorrectionDisabled(true)
-                    .textInputAutocapitalization(.never)
+                ZStack {
+                    // Custom placeholder
+                    if roomCode.isEmpty {
+                        Text("Enter Room Code")
+                            .foregroundColor(.gray)
+                            .font(.title3)
+                    }
+                    
+                    TextField("", text: $roomCode)
+                        .keyboardType(.numberPad)
+                        .font(.title3)
+                        .foregroundColor(.black)
+                        .multilineTextAlignment(.center)
+                        .focused($isRoomCodeFocused)
+                        .autocorrectionDisabled(true)
+                        .textInputAutocapitalization(.never)
+                        .accentColor(.purple)
+                }
+                .padding(12)
+                .padding(.trailing, 40) // Space for clear button
+                .background(Color.white)
+                .cornerRadius(10)
                 
                 // Clear button overlaid on the right
                 Button(action: {
