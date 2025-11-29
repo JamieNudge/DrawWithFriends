@@ -29,8 +29,6 @@ struct DrawingCanvasView: View {
     @State private var showCopiedConfirmation = false
     @State private var showPhotoSharingWarning = false
     @State private var pendingPhotoItem: PhotosPickerItem?
-    @State private var signatureMode = false // Signature mode: transparent background export
-    @State private var showToolbar = true // Control toolbar visibility
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     // Drawing tool state
@@ -44,19 +42,10 @@ struct DrawingCanvasView: View {
     @State private var lineWidth: CGFloat = 5
     @State private var allowOthersToErase = false // Toggle for eraser permissions
     
-    // Undo/Redo stacks
-    @State private var undoStack: [PKDrawing] = []
-    @State private var redoStack: [PKDrawing] = []
-    @State private var isUndoRedoAction = false // Flag to prevent clearing redo stack during undo/redo
-    @State private var lastStrokeCount = 0 // Track stroke count to detect new strokes
-    @State private var drawingBeforeChange: PKDrawing? = nil // Snapshot before user starts drawing
-    @State private var drawingBeforeEcho: PKDrawing? = nil // Snapshot before echo mode was enabled
-    
     // MARK: - Toolbar View
     private var toolbarView: some View {
         VStack(spacing: 8) {
-            // ROW 1: Drawing tools + color
-            HStack(spacing: 12) {
+            HStack(spacing: 16) {
                 // Color picker
                 Button(action: { showColorPicker.toggle() }) {
                     Circle()
@@ -67,279 +56,169 @@ struct DrawingCanvasView: View {
                 }
                 
                 // Tool buttons
-                ToolButton(icon: "pencil.tip", isActive: selectedTool == .pencil) { 
-                    selectedTool = .pencil
-                }
-                ToolButton(icon: "paintbrush.pointed.fill", isActive: selectedTool == .brush) { 
-                    selectedTool = selectedTool == .brush ? .pencil : .brush
-                }
-                ToolButton(icon: "paintbrush.pointed", isActive: selectedTool == .spray) { 
-                    selectedTool = selectedTool == .spray ? .pencil : .spray
-                }
-                ToolButton(icon: "eraser.fill", isActive: selectedTool == .eraser) { 
-                    // If echo is on, turn it off first
-                    if echoModeEnabled {
-                        echoModeEnabled = false
-                        canvasViewModel.echoModeEnabled = false
-                        print("🔄 Auto-disabled echo to enable eraser")
-                        
-                        // Capture snapshot when echo turns off
-                        let currentDrawing = canvasViewModel.canvasView.drawing
-                        undoStack.removeAll()
-                        redoStack.removeAll()
+                HStack(spacing: 12) {
+                    ToolButton(icon: "pencil.tip", isActive: selectedTool == .pencil) { 
+                        selectedTool = .pencil
                     }
-                    
-                    selectedTool = selectedTool == .eraser ? .pencil : .eraser
+                    ToolButton(icon: "paintbrush.pointed.fill", isActive: selectedTool == .brush) { 
+                        selectedTool = .brush
+                    }
+                    ToolButton(icon: "paintbrush.pointed", isActive: selectedTool == .spray) { 
+                        selectedTool = .spray
+                    }
+                    ToolButton(icon: "eraser.fill", isActive: selectedTool == .eraser) { 
+                        selectedTool = .eraser
+                    }
                 }
                 
-                Spacer()
-            }
-            .padding(.horizontal, 8)
-            
-            // ROW 2: Line width + undo/redo
-            HStack(spacing: 12) {
                 // Thickness slider
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Image(systemName: "line.diagonal")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.8))
                     Slider(value: $lineWidth, in: 1...30, step: 1)
+                        .frame(maxWidth: 240)
                     Text("\(Int(lineWidth))")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.8))
-                        .frame(width: 25, alignment: .leading)
+                        .frame(width: 28, alignment: .leading)
                 }
-                
-                // Undo button
-                Button(action: {
-                    print("⏪ Undo tapped - stack: \(undoStack.count), receiving: \(canvasViewModel.isReceivingUpdate), echo: \(echoModeEnabled)")
-                    
-                    // If echo is on, turn it off first (but continue with undo)
-                    if echoModeEnabled {
-                        echoModeEnabled = false
-                        canvasViewModel.echoModeEnabled = false
-                        print("🔄 Auto-disabled echo to use undo")
-                        // Don't return - continue with undo operation
-                    }
-                    
-                    if !undoStack.isEmpty && !canvasViewModel.isReceivingUpdate {
-                        isUndoRedoAction = true
-                        canvasViewModel.isUndoRedoActive = true
-                        
-                        // Save current state to redo stack
-                        let currentDrawing = canvasViewModel.canvasView.drawing
-                        redoStack.append(currentDrawing)
-                        
-                        // Limit redo stack size
-                        if redoStack.count > 50 {
-                            redoStack.removeFirst()
-                        }
-                        
-                        // Restore previous state from undo stack
-                        if let previousDrawing = undoStack.popLast() {
-                            canvasViewModel.canvasView.drawing = previousDrawing
-                            print("⏪ Undo executed: restored drawing with \(previousDrawing.strokes.count) strokes")
-                        }
-                        
-                        // Keep flag active longer to prevent PKCanvasView delegate callbacks from triggering snapshots
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            isUndoRedoAction = false
-                            canvasViewModel.isUndoRedoActive = false
-                            print("⏪ Undo action flag cleared")
-                        }
-                    } else {
-                        print("⏪ Undo BLOCKED")
-                    }
-                }) {
-                    let canUndo = !undoStack.isEmpty && !canvasViewModel.isReceivingUpdate
-                    Image(systemName: "arrow.uturn.backward")
-                        .font(.system(size: 16))
-                        .foregroundColor(.white)
-                        .frame(width: 36, height: 36)
-                        .background(canUndo ? Color.blue : Color.gray.opacity(0.3))
-                        .clipShape(Circle())
-                }
-                .disabled(undoStack.isEmpty || canvasViewModel.isReceivingUpdate)
-                
-                // Redo button
-                Button(action: {
-                    // If echo is on, turn it off first (but continue with redo)
-                    if echoModeEnabled {
-                        echoModeEnabled = false
-                        canvasViewModel.echoModeEnabled = false
-                        print("🔄 Auto-disabled echo to use redo")
-                        // Don't return - continue with redo operation
-                    }
-                    
-                    if !redoStack.isEmpty && !canvasViewModel.isReceivingUpdate {
-                        isUndoRedoAction = true
-                        canvasViewModel.isUndoRedoActive = true
-                        
-                        // Save current state to undo stack
-                        let currentDrawing = canvasViewModel.canvasView.drawing
-                        undoStack.append(currentDrawing)
-                        
-                        // Limit undo stack size
-                        if undoStack.count > 50 {
-                            undoStack.removeFirst()
-                        }
-                        
-                        // Restore next state from redo stack
-                        if let nextDrawing = redoStack.popLast() {
-                            canvasViewModel.canvasView.drawing = nextDrawing
-                            print("↪️ Redo executed: restored drawing with \(nextDrawing.strokes.count) strokes")
-                        }
-                        
-                        // Keep flag active longer to prevent PKCanvasView delegate callbacks from triggering snapshots
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            isUndoRedoAction = false
-                            canvasViewModel.isUndoRedoActive = false
-                            print("↪️ Redo action flag cleared")
-                        }
-                    }
-                }) {
-                    let canRedo = !redoStack.isEmpty && !canvasViewModel.isReceivingUpdate
-                    Image(systemName: "arrow.uturn.forward")
-                        .font(.system(size: 16))
-                        .foregroundColor(.white)
-                        .frame(width: 36, height: 36)
-                        .background(canRedo ? Color.blue : Color.gray.opacity(0.3))
-                        .clipShape(Circle())
-                }
-                .disabled(redoStack.isEmpty || canvasViewModel.isReceivingUpdate)
             }
-            .padding(.horizontal, 8)
             
-            // ROW 3: Action buttons
-            HStack(spacing: 10) {
-                // Import photo
+            HStack(spacing: 16) {
+                // Eraser permissions toggle (only show when eraser is selected)
+                if selectedTool == .eraser {
+                    Button(action: {
+                        allowOthersToErase.toggle()
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: allowOthersToErase ? "lock.open" : "lock")
+                            Text(allowOthersToErase ? "Others Can Erase" : "Protected")
+                                .font(.caption)
+                        }
+                        .foregroundColor(.white)
+                        .padding(8)
+                        .background(allowOthersToErase ? Color.orange : Color.red)
+                        .clipShape(Capsule())
+                    }
+                }
+                
+                // Import photo button
                 PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                    Image(systemName: "photo")
-                        .font(.system(size: 16))
+                    Image(systemName: "photo.fill")
+                        .font(.system(size: 20, weight: .semibold))
                         .foregroundColor(.white)
-                        .frame(width: 36, height: 36)
-                        .background(Color.green)
+                        .frame(width: 50, height: 50)
+                        .background(
+                            LinearGradient(
+                                colors: [Color.green, Color.teal],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
                         .clipShape(Circle())
+                        .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
                 }
                 
-                // Export
+                // Export button in toolbar
                 Button(action: exportAsImage) {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 16))
+                    Image(systemName: "square.and.arrow.up.fill")
+                        .font(.system(size: 20, weight: .semibold))
                         .foregroundColor(.white)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 50, height: 50)
+                        .background(
+                            LinearGradient(
+                                colors: [Color.blue, Color.purple],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .clipShape(Circle())
+                        .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
+                }
+                
+                Button(action: {
+                    if canvasViewModel.canvasView.drawing.strokes.count > 0 {
+                        var drawing = canvasViewModel.canvasView.drawing
+                        drawing.strokes.removeLast()
+                        canvasViewModel.canvasView.drawing = drawing
+                    }
+                }) {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                        .labelStyle(.iconOnly)
+                        .foregroundColor(.white)
+                        .padding(8)
                         .background(Color.blue)
-                        .clipShape(Circle())
+                        .clipShape(Capsule())
                 }
                 
-                // Echo toggle
-                Button(action: {
-                    // If eraser is active, switch to pencil first
-                    if !echoModeEnabled && selectedTool == .eraser {
-                        selectedTool = .pencil
-                        print("🔄 Auto-switched from eraser to pencil to enable echo")
-                    }
-                    
-                    let wasEchoOn = echoModeEnabled
-                    echoModeEnabled.toggle()
-                    canvasViewModel.echoModeEnabled = echoModeEnabled
-                    canvasViewModel.echoCount = echoCount
-                    canvasViewModel.logEchoStateChange()
-                    
-                    // When turning echo ON: Save current state, clear undo/redo, and rebuild tracking
-                    if echoModeEnabled {
-                        print("🔊 Echo ON - saving pre-echo state, clearing undo/redo, and rebuilding tracking")
-                        drawingBeforeEcho = canvasViewModel.canvasView.drawing
-                        canvasViewModel.rebuildTrackingFromCurrentCanvas()
-                        
-                        // Clear undo/redo stacks to prevent conflicts with echo tracking
-                        undoStack.removeAll()
-                        redoStack.removeAll()
-                    }
-                    
-                    // When turning echo OFF: Keep undo stack intact so user can undo echo strokes
-                    if !echoModeEnabled && wasEchoOn {
-                        print("🔊 Echo OFF - undo stack preserved (size: \(undoStack.count))")
-                        // Clear redo stack only
-                        redoStack.removeAll()
-                        drawingBeforeEcho = nil
-                    }
-                }) {
-                    Image(systemName: echoModeEnabled ? "waveform.path" : "waveform.path.badge.minus")
-                        .font(.system(size: 16))
+                // Echo Drawing Tool (works in both simultaneous and turn-based modes)
+                HStack(spacing: 8) {
+                    // Echo toggle button
+                    Button(action: {
+                        echoModeEnabled.toggle()
+                        canvasViewModel.echoModeEnabled = echoModeEnabled
+                        canvasViewModel.echoCount = echoCount
+                        canvasViewModel.logEchoStateChange()
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "waveform.path")
+                            Text(echoModeEnabled ? "Echo" : "Echo Off")
+                                .font(.caption)
+                        }
                         .foregroundColor(.white)
-                        .frame(width: 36, height: 36)
+                        .padding(8)
                         .background(echoModeEnabled ? Color.purple : Color.gray)
-                        .clipShape(Circle())
-                }
-                
-                // Echo count (only when enabled)
-                if echoModeEnabled {
-                    HStack(spacing: 4) {
-                        Button(action: {
-                            if echoCount > 0 {
-                                echoCount -= 1
-                                canvasViewModel.echoCount = echoCount
-                                canvasViewModel.logEchoStateChange()
-                            }
-                        }) {
-                            Image(systemName: "minus.circle.fill")
-                                .foregroundColor(.white)
-                        }
-                        
-                        Text(echoCount == 0 ? "∞" : "\(echoCount)")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .frame(minWidth: 18)
-                        
-                        Button(action: {
-                            if echoCount < 10 {
-                                echoCount += 1
-                            } else {
-                                echoCount = 0
-                            }
-                            canvasViewModel.echoCount = echoCount
-                            canvasViewModel.logEchoStateChange()
-                        }) {
-                            Image(systemName: "plus.circle.fill")
-                                .foregroundColor(.white)
-                        }
+                        .clipShape(Capsule())
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 6)
-                    .background(Color.purple.opacity(0.8))
-                    .clipShape(Capsule())
-                }
-                
-                // Signature mode
-                Button(action: {
-                    signatureMode.toggle()
-                }) {
-                    Image(systemName: "signature")
-                        .font(.system(size: 16))
-                        .foregroundColor(.white)
-                        .frame(width: 36, height: 36)
-                        .background(signatureMode ? Color.blue : Color.gray)
-                        .clipShape(Circle())
-                }
-                
-                Spacer()
-                
-                // Hide toolbar
-                Button(action: {
-                    withAnimation {
-                        showToolbar = false
+                    
+                    // Echo count controls (only show when enabled)
+                    if echoModeEnabled {
+                        HStack(spacing: 4) {
+                            // Minus button
+                            Button(action: {
+                                if echoCount > 0 {
+                                    echoCount -= 1
+                                    canvasViewModel.echoCount = echoCount
+                                    canvasViewModel.logEchoStateChange()
+                                }
+                            }) {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.body)
+                                    .foregroundColor(.white)
+                            }
+                            
+                            // Count display
+                            Text(echoCount == 0 ? "∞" : "\(echoCount)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                                .frame(minWidth: 20)
+                            
+                            // Plus button
+                            Button(action: {
+                                if echoCount < 10 {
+                                    echoCount += 1
+                                    canvasViewModel.echoCount = echoCount
+                                    canvasViewModel.logEchoStateChange()
+                                } else if echoCount == 10 {
+                                    echoCount = 0 // Wrap to infinite
+                                    canvasViewModel.echoCount = echoCount
+                                    canvasViewModel.logEchoStateChange()
+                                }
+                            }) {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.body)
+                                    .foregroundColor(.white)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(Color.purple.opacity(0.8))
+                        .clipShape(Capsule())
                     }
-                }) {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 16))
-                        .foregroundColor(.white)
-                        .frame(width: 36, height: 36)
-                        .background(Color.gray.opacity(0.8))
-                        .clipShape(Circle())
                 }
             }
-            .padding(.horizontal, 8)
         }
         .padding()
         .background(Color.black.opacity(0.05))
@@ -457,128 +336,29 @@ struct DrawingCanvasView: View {
                         canvasView: $canvasViewModel.canvasView,
                         onDrawingChanged: { drawing in
                             canvasViewModel.handleDrawingChange(drawing)
-                            
-                            // Update stroke count for button states
-                            let currentCount = drawing.strokes.count
-                            lastStrokeCount = currentCount
                         },
                         onDrawingStarted: {
-                            // Save current drawing state before user makes changes
-                            // BUT NOT during Firebase rebuilds/syncs OR during undo/redo
-                            // We DO capture when echo is on (we'll save after the rebuild completes)
-                            if !isUndoRedoAction && !canvasViewModel.isReceivingUpdate {
-                                drawingBeforeChange = canvasViewModel.canvasView.drawing
-                                print("💾 Undo: Captured snapshot (\(canvasViewModel.canvasView.drawing.strokes.count) strokes)")
-                            } else {
-                                print("💾 Undo: SKIPPED snapshot - isUndoRedo: \(isUndoRedoAction), isReceiving: \(canvasViewModel.isReceivingUpdate)")
-                            }
                             canvasViewModel.handleDrawingStarted()
                         },
                         onDrawingEnded: {
-                            // After drawing ends, save the "before" state to undo stack
-                            // BUT NOT during Firebase rebuilds/syncs
-                            // If echo is on, wait for rebuild to complete before saving
-                            if !isUndoRedoAction && !canvasViewModel.isReceivingUpdate,
-                               let beforeDrawing = drawingBeforeChange {
-                                
-                                if echoModeEnabled {
-                                    // Wait for echo rebuild to complete (0.3s), then save snapshot
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                        self.undoStack.append(beforeDrawing)
-                                        self.redoStack.removeAll()
-                                        if self.undoStack.count > 50 {
-                                            self.undoStack.removeFirst()
-                                        }
-                                        print("💾 Undo: Saved to stack after echo rebuild (stack size: \(self.undoStack.count))")
-                                    }
-                                } else {
-                                    // No echo, save immediately
-                                    undoStack.append(beforeDrawing)
-                                    redoStack.removeAll()
-                                    if undoStack.count > 50 {
-                                        undoStack.removeFirst()
-                                    }
-                                    print("💾 Undo: Saved to stack (stack size: \(undoStack.count))")
-                                }
-                            } else {
-                                print("💾 Undo: SKIPPED - isUndoRedo: \(isUndoRedoAction), isReceiving: \(canvasViewModel.isReceivingUpdate), hasSnapshot: \(drawingBeforeChange != nil)")
-                            }
-                            drawingBeforeChange = nil
                             canvasViewModel.handleDrawingEnded()
                         }
                     )
-                    .frame(width: geometry.size.width, height: geometry.size.height)
                 }
                 .onAppear {
                     canvasViewModel.currentCanvasSize = geometry.size
-                    print("📐 Canvas size on appear: \(geometry.size)")
-                    print("📐 Canvas drawing bounds: \(canvasViewModel.canvasView.drawing.bounds)")
-                    print("📐 Canvas stroke count: \(canvasViewModel.canvasView.drawing.strokes.count)")
                 }
                 .onChange(of: geometry.size) { newSize in
-                    let oldSize = canvasViewModel.currentCanvasSize
                     canvasViewModel.currentCanvasSize = newSize
-                    print("📐 Canvas size changed: \(oldSize) → \(newSize)")
-                    print("📐 Canvas drawing bounds: \(canvasViewModel.canvasView.drawing.bounds)")
-                    print("📐 Canvas stroke count: \(canvasViewModel.canvasView.drawing.strokes.count)")
-                    
-                    // Check if strokes are out of bounds
-                    let drawing = canvasViewModel.canvasView.drawing
-                    if !drawing.strokes.isEmpty {
-                        let maxX = drawing.strokes.map { $0.renderBounds.maxX }.max() ?? 0
-                        let maxY = drawing.strokes.map { $0.renderBounds.maxY }.max() ?? 0
-                        print("📐 Furthest stroke position: x=\(maxX), y=\(maxY)")
-                        if maxX > newSize.width || maxY > newSize.height {
-                            print("⚠️ WARNING: Strokes extend beyond canvas bounds!")
-                        }
-                    }
                 }
             }
             
-            // TOOLS - Bottom bar (keep space always, but optionally show toolbar)
-            Group {
-                if showToolbar {
-                    toolbarView
-                        .onChange(of: selectedTool) { _ in updateTool() }
-                        .onChange(of: lineWidth) { _ in updateTool() }
-                        .onChange(of: selectedColor) { _ in updateTool() }
-                        .onAppear { updateTool() }
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else {
-                    Color.clear.frame(height: 0)
-                }
-            }
-            }
-            
-            // Floating toolbar toggle button (when hidden) - overlay at bottom-right
-            if !showToolbar {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        Button(action: {
-                            withAnimation {
-                                showToolbar = true
-                            }
-                        }) {
-                            Image(systemName: "paintbrush.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 56, height: 56)
-                                .background(
-                                    LinearGradient(
-                                        colors: [Color.blue, Color.purple],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .clipShape(Circle())
-                                .shadow(radius: 8)
-                        }
-                        .padding(.trailing, 20)
-                        .padding(.bottom, 20)
-                    }
-                }
+            // TOOLS - Bottom bar
+            toolbarView
+                .onChange(of: selectedTool) { _ in updateTool() }
+                .onChange(of: lineWidth) { _ in updateTool() }
+                .onChange(of: selectedColor) { _ in updateTool() }
+                .onAppear { updateTool() }
             }
             
             // Color picker overlay
@@ -680,7 +460,6 @@ struct DrawingCanvasView: View {
             }
             
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom) // Allow keyboard to overlap
         .onAppear {
             canvasViewModel.startObserving()
             updateTool()
@@ -788,8 +567,7 @@ struct DrawingCanvasView: View {
         guard let image = DrawingManager.shared.exportAsImage(
             canvasViewModel.canvasView.drawing,
             backgroundImage: backgroundImage,
-            canvasSize: canvasViewModel.currentCanvasSize,
-            transparentBackground: signatureMode
+            canvasSize: canvasViewModel.currentCanvasSize
         ) else {
             showExportError = true
             return
@@ -825,9 +603,7 @@ struct DrawingCanvasView: View {
         if selectedTool == .eraser {
             // Use PKEraserTool for erasing
             canvasViewModel.canvasView.tool = PKEraserTool(.bitmap)
-            canvasViewModel.isEraserActive = true
         } else {
-            canvasViewModel.isEraserActive = false
             let base = UIColor(selectedColor)
             let inkType: PKInkingTool.InkType
             let color: UIColor
@@ -867,19 +643,18 @@ struct CanvasView: UIViewRepresentable {
         canvasView.maximumZoomScale = 4.0  // Zoom in to 400%
         canvasView.zoomScale = 1.0
         
-        // Transparent background so we can see images behind it
-        canvasView.backgroundColor = .clear
-        canvasView.isOpaque = false
+        // White background so all colors are visible in both light and dark mode
+        canvasView.backgroundColor = .white
+        canvasView.isOpaque = true
         
-        // Ensure autoresizing works
-        canvasView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // Force light mode for the canvas so it always shows white background
+        canvasView.overrideUserInterfaceStyle = .light
         
         return canvasView
     }
     
     func updateUIView(_ uiView: PKCanvasView, context: Context) {
-        // PKCanvasView will automatically resize based on frame
-        // No manual updates needed
+        // Updates handled by coordinator
     }
     
     func makeCoordinator() -> Coordinator {
@@ -927,12 +702,10 @@ class CanvasViewModel: ObservableObject {
     @Published var echoModeEnabled = false
     @Published var echoCount = 2 // Number of times to echo (1 = no echo, 2-10 = limited, 0 = infinite)
     private var echoEnabledStrokeCount = 0 // Track stroke count when echo was enabled
-    var isEraserActive = false // Track if eraser tool is active (to prevent echo on eraser)
-    var isUndoRedoActive = false // Track if undo/redo is in progress (to prevent cleanup corruption)
     
     private let firebaseManager = FirebaseManager.shared
     private let diagnostics = DiagnosticsManager.shared
-    var isReceivingUpdate = false // Internal access for undo/redo checks
+    private var isReceivingUpdate = false
     private var syncTimer: Timer?
     private var lastLocalDrawing: Data?
     private var roomMode: String?
@@ -956,9 +729,6 @@ class CanvasViewModel: ObservableObject {
         let originalUserId: String
         var stroke: PKStroke? // Cached decoded stroke
     }
-    
-    // ERASER BUG FIX: Track deleted strokes to prevent them from coming back
-    private var deletedStrokeIds = Set<String>()
     
     private var allKnownStrokes: [String: StrokeInfo] = [:] // All strokes by ID (mine + others)
     private var strokeOrder: [String] = [] // Ordered list of stroke IDs (by timestamp)
@@ -1289,12 +1059,6 @@ class CanvasViewModel: ObservableObject {
                 return
             }
             
-            // ERASER BUG FIX: Don't re-add strokes that were deleted (erased)
-            if self.deletedStrokeIds.contains(strokeId) {
-                self.diagnostics.logInfo("⛔ Ignoring deleted stroke \(strokeId.prefix(8))...")
-                return
-            }
-            
             // Mark activity to keep sync timer alive when receiving strokes
             self.markActivity()
             
@@ -1407,21 +1171,8 @@ class CanvasViewModel: ObservableObject {
                     canvasSize: currentCanvasSize
                 )
                 
-                // Calculate the global index of this stroke on the canvas
-                let globalStrokeIndex = lastCanvasStrokeCount + index
-                let lastNewGlobalIndex = lastCanvasStrokeCount + newCount - 1
-                
-                // Self-echo: Only echo the LAST new stroke in this batch.
-                // This prevents echo from duplicating all previous strokes
-                // when echo is toggled on mid-session or when PencilKit
-                // splits a single gesture into multiple strokes.
-                let shouldEcho = echoModeEnabled && !isEraserActive && globalStrokeIndex == lastNewGlobalIndex
-                
-                if !shouldEcho && echoModeEnabled {
-                    diagnostics.logInfo("🔇 Echo SKIPPED for stroke at index \(globalStrokeIndex) (last new index: \(lastNewGlobalIndex))")
-                }
-                
-                if shouldEcho {
+                // Self-echo: If echo mode is enabled, create echo copies with offset
+                if echoModeEnabled {
                     let echoLimit = echoCount == 0 ? 10 : echoCount // Cap infinite at 10 for safety
                     for echoIndex in 1...echoLimit {
                         let echoId = UUID().uuidString
@@ -1469,21 +1220,8 @@ class CanvasViewModel: ObservableObject {
             lastCanvasStrokeCount = currentStrokes.count
             
         } else if currentStrokes.count < lastCanvasStrokeCount {
-            // Canvas was cleared or strokes removed (e.g., eraser used)
+            // Canvas was cleared or strokes removed
             diagnostics.logWarning("Canvas stroke count decreased: \(lastCanvasStrokeCount) → \(currentStrokes.count)")
-            
-            // If this came from undo/redo, don't treat it as erasure.
-            // Undo/redo operate on snapshots; they shouldn't corrupt the stroke model.
-            if isUndoRedoActive {
-                diagnostics.logInfo("Stroke decrease from undo/redo - skipping cleanup")
-                lastCanvasStrokeCount = currentStrokes.count
-                return
-            }
-            
-            // ERASER FIX: Clean up tracking to match current canvas state
-            // This prevents erased strokes from coming back during rebuild
-            cleanupErasedStrokes(currentStrokes: currentStrokes)
-            
             lastCanvasStrokeCount = currentStrokes.count
         }
     }
@@ -1513,11 +1251,6 @@ class CanvasViewModel: ObservableObject {
             
             // Build canvas from all strokes in timestamp order
             for strokeId in self.strokeOrder {
-                // ERASER BUG FIX: Skip deleted strokes during rebuild
-                if self.deletedStrokeIds.contains(strokeId) {
-                    continue
-                }
-                
                 guard var strokeInfo = self.allKnownStrokes[strokeId] else { continue }
                 
                 // Use cached stroke if available, otherwise decode
@@ -1558,63 +1291,6 @@ class CanvasViewModel: ObservableObject {
             self.isReceivingUpdate = false
             self.isRebuilding = false
             self.diagnostics.updateMetrics(roomCode: nil, userId: nil, isRebuilding: false)
-        }
-    }
-    
-    // Clean up erased strokes from tracking (ERASER BUG FIX)
-    private func cleanupErasedStrokes(currentStrokes: [PKStroke]) {
-        guard !allKnownStrokes.isEmpty else { return }
-        
-        // SAFETY CHECK: If the tracking model has way more strokes than the canvas,
-        // it means we're out of sync (e.g., Firebase echoes not yet integrated).
-        // In this case, DO NOT clean up - just rebuild tracking from canvas instead.
-        let trackingCount = allKnownStrokes.count
-        let canvasCount = currentStrokes.count
-        
-        if trackingCount > canvasCount * 2 {
-            diagnostics.logWarning("🚨 Tracking model severely out of sync (\(trackingCount) tracked vs \(canvasCount) on canvas). Rebuilding instead of cleaning.")
-            rebuildTrackingFromCurrentCanvas()
-            return
-        }
-        
-        // Build set of data representations for current canvas strokes
-        var currentStrokeDataSet = Set<Data>()
-        for stroke in currentStrokes {
-            var drawing = PKDrawing()
-            drawing.strokes = [stroke]
-            let data = drawing.dataRepresentation()
-            currentStrokeDataSet.insert(data)
-        }
-        
-        // Find stroke IDs that no longer exist on canvas
-        var idsToRemove: [String] = []
-        for (strokeId, strokeInfo) in allKnownStrokes {
-            if !currentStrokeDataSet.contains(strokeInfo.data) {
-                idsToRemove.append(strokeId)
-            }
-        }
-        
-        // SAFETY CHECK: If we're about to remove too many strokes, something is wrong.
-        // This prevents catastrophic cleanup when data comparison fails.
-        let expectedRemovalCount = trackingCount - canvasCount
-        if idsToRemove.count > expectedRemovalCount * 3 {
-            diagnostics.logWarning("🚨 Cleanup would remove \(idsToRemove.count) strokes but only expected ~\(expectedRemovalCount). Rebuilding instead.")
-            rebuildTrackingFromCurrentCanvas()
-            return
-        }
-        
-        // Remove erased strokes from tracking AND mark as deleted permanently
-        if !idsToRemove.isEmpty {
-            diagnostics.logInfo("🧹 Cleaning up \(idsToRemove.count) erased strokes from tracking")
-            for strokeId in idsToRemove {
-                allKnownStrokes.removeValue(forKey: strokeId)
-                strokeOrder.removeAll { $0 == strokeId }
-                echoedStrokeIds.remove(strokeId)
-                strokeEchoCounts.removeValue(forKey: strokeId)
-                
-                // ERASER BUG FIX: Mark as permanently deleted to prevent Firebase from re-adding
-                deletedStrokeIds.insert(strokeId)
-            }
         }
     }
     
@@ -1692,49 +1368,7 @@ class CanvasViewModel: ObservableObject {
         lastCanvasStrokeCount = 0
         echoedStrokeIds.removeAll()
         strokeEchoCounts.removeAll()
-        deletedStrokeIds.removeAll() // ERASER BUG FIX: Also clear deleted strokes list
         print("🧹 Stroke tracking reset")
-    }
-    
-    /// Rebuild internal stroke tracking from the current visible canvas.
-    /// Used when enabling echo mode after undo/redo/eraser activity so that
-    /// `allKnownStrokes` and `strokeOrder` exactly match what's on screen.
-    func rebuildTrackingFromCurrentCanvas() {
-        let currentStrokes = canvasView.drawing.strokes
-        print("🧩 Rebuilding stroke tracking from canvas (\(currentStrokes.count) strokes)")
-        
-        allKnownStrokes.removeAll()
-        strokeOrder.removeAll()
-        echoedStrokeIds.removeAll()
-        strokeEchoCounts.removeAll()
-        deletedStrokeIds.removeAll()
-        
-        let baseTimestamp = Date().timeIntervalSince1970
-        
-        for (index, stroke) in currentStrokes.enumerated() {
-            let strokeId = UUID().uuidString
-            
-            var drawing = PKDrawing()
-            drawing.strokes = [stroke]
-            let data = drawing.dataRepresentation()
-            
-            let info = StrokeInfo(
-                id: strokeId,
-                data: data,
-                timestamp: baseTimestamp + Double(index) * 0.001,
-                originalSize: currentCanvasSize,
-                originalUserId: userId,
-                stroke: stroke
-            )
-            
-            allKnownStrokes[strokeId] = info
-            strokeOrder.append(strokeId)
-        }
-        
-        lastCanvasStrokeCount = currentStrokes.count
-        echoEnabledStrokeCount = currentStrokes.count
-        
-        print("🧩 Stroke tracking rebuild complete. Tracked strokes: \(allKnownStrokes.count)")
     }
     
     // MARK: - Common
@@ -1775,8 +1409,8 @@ class CanvasViewModel: ObservableObject {
     
     // Add echo strokes directly to canvas (for turn-based mode)
     private func addEchoesToCanvas() {
-        guard echoModeEnabled && !isEraserActive else {
-            // Update the tracking counter even when echo is off or eraser is active
+        guard echoModeEnabled else {
+            // Update the tracking counter even when echo is off
             echoEnabledStrokeCount = canvasView.drawing.strokes.count
             return
         }
