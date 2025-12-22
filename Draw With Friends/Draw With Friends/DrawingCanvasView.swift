@@ -260,17 +260,26 @@ struct DrawingCanvasView: View {
                     DiagnosticsToggleButton(isShowing: $showDiagnostics)
                     
                     if let roomCode = firebaseManager.currentRoomCode {
-                        HStack {
-                            Text("Room: \(roomCode)")
-                                .font(.caption)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Color.white.opacity(0.9))
-                                .cornerRadius(15)
-                                .onAppear {
-                                    print("🏠🏠🏠 THIS DEVICE IS IN ROOM: \(roomCode)")
-                                    print("🏠🏠🏠 My UserId: \(UserSession.shared.userId)")
-                                }
+                        HStack(spacing: 8) {
+                            HStack(spacing: 4) {
+                                Text("Room Code:")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.secondary)
+                                Text(roomCode)
+                                    .font(.title3)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.primary)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.95))
+                            .cornerRadius(12)
+                            .shadow(color: .black.opacity(0.1), radius: 3, x: 0, y: 2)
+                            .onAppear {
+                                print("🏠🏠🏠 THIS DEVICE IS IN ROOM: \(roomCode)")
+                                print("🏠🏠🏠 My UserId: \(UserSession.shared.userId)")
+                            }
                             
                             Button(action: {
                                 UIPasteboard.general.string = roomCode
@@ -282,11 +291,12 @@ struct DrawingCanvasView: View {
                                 }
                             }) {
                                 Image(systemName: "doc.on.doc")
-                                    .font(.caption)
-                                    .foregroundColor(.blue)
-                                    .padding(6)
-                                    .background(Color.white.opacity(0.9))
+                                    .font(.body)
+                                    .foregroundColor(.white)
+                                    .padding(10)
+                                    .background(Color.blue)
                                     .clipShape(Circle())
+                                    .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
                             }
                         }
                     }
@@ -739,6 +749,11 @@ class CanvasViewModel: ObservableObject {
     private var echoedStrokeIds: Set<String> = [] // Track echoed strokes
     private var strokeEchoCounts: [String: Int] = [:] // Track echo counts for limited echo mode
     
+    // Full canvas sync tracking (for eraser and periodic reconciliation)
+    private var lastAppliedSyncId: String = "" // Track last sync ID we applied to avoid loops
+    private var lastFullSyncTime: Date = Date() // For periodic full sync
+    private let fullSyncInterval: TimeInterval = 15.0 // Full sync every 15 seconds
+    
     private var userId: String {
         return UserSession.shared.userId
     }
@@ -1089,6 +1104,57 @@ class CanvasViewModel: ObservableObject {
             // This ensures both devices see exactly the same thing.
         }
         
+        // Observe full canvas syncs (for eraser and periodic reconciliation)
+        print("   Setting up full canvas sync observer...")
+        firebaseManager.observeFullCanvasSync { [weak self] (drawingData: Data, senderId: String, syncId: String, canvasSize: CGSize?) in
+            guard let self = self else { return }
+            
+            // Ignore our own syncs
+            if senderId == self.userId {
+                print("🔄 Ignoring own full canvas sync")
+                return
+            }
+            
+            // Ignore if we already applied this sync
+            if syncId == self.lastAppliedSyncId {
+                print("🔄 Ignoring already-applied sync: \(syncId.prefix(8))")
+                return
+            }
+            
+            print("🔄📥 RECEIVING FULL CANVAS SYNC from \(senderId.prefix(8)), syncId: \(syncId.prefix(8))")
+            
+            self.markActivity()
+            self.lastAppliedSyncId = syncId
+            
+            // Apply the full canvas state
+            DispatchQueue.main.async {
+                guard let drawing = try? PKDrawing(data: drawingData) else {
+                    print("   ❌ Failed to decode full canvas sync")
+                    return
+                }
+                
+                // Scale if needed
+                var finalDrawing = drawing
+                if let originalSize = canvasSize,
+                   self.currentCanvasSize.width > 0 && self.currentCanvasSize.height > 0,
+                   originalSize.width > 0 && originalSize.height > 0,
+                   originalSize != self.currentCanvasSize {
+                    finalDrawing = self.scaleDrawing(drawing, from: originalSize, to: self.currentCanvasSize)
+                }
+                
+                // Clear our stroke tracking and rebuild from full sync
+                self.allKnownStrokes.removeAll()
+                self.strokeOrder.removeAll()
+                
+                self.isReceivingUpdate = true
+                self.canvasView.drawing = finalDrawing
+                self.lastCanvasStrokeCount = finalDrawing.strokes.count
+                self.isReceivingUpdate = false
+                
+                print("   ✅ Applied full canvas sync: \(finalDrawing.strokes.count) strokes")
+            }
+        }
+        
         print("   Setting up sync timer (0.5s interval)...")
         syncTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.syncSimultaneous()
@@ -1126,6 +1192,30 @@ class CanvasViewModel: ObservableObject {
         }
         
         captureNewLocalStrokes()
+        
+        // Periodic full canvas sync to prevent divergence
+        let timeSinceLastFullSync = Date().timeIntervalSince(lastFullSyncTime)
+        if timeSinceLastFullSync >= fullSyncInterval && canvasView.drawing.strokes.count > 0 {
+            sendPeriodicFullSync()
+        }
+    }
+    
+    /// Send periodic full canvas sync to keep devices in sync
+    private func sendPeriodicFullSync() {
+        lastFullSyncTime = Date()
+        
+        let drawingData = canvasView.drawing.dataRepresentation()
+        let syncId = UUID().uuidString
+        lastAppliedSyncId = syncId // Mark as our own so we don't reapply
+        
+        print("🔄📤 PERIODIC FULL SYNC - sending \(canvasView.drawing.strokes.count) strokes")
+        
+        firebaseManager.sendFullCanvasSync(
+            drawingData: drawingData,
+            userId: userId,
+            canvasSize: currentCanvasSize,
+            syncId: syncId
+        )
     }
     
     // Capture any new local strokes and add them to the collection
@@ -1220,9 +1310,32 @@ class CanvasViewModel: ObservableObject {
             lastCanvasStrokeCount = currentStrokes.count
             
         } else if currentStrokes.count < lastCanvasStrokeCount {
-            // Canvas was cleared or strokes removed
-            diagnostics.logWarning("Canvas stroke count decreased: \(lastCanvasStrokeCount) → \(currentStrokes.count)")
+            // Canvas was cleared or strokes removed (ERASER USED!)
+            let removedCount = lastCanvasStrokeCount - currentStrokes.count
+            diagnostics.logWarning("🧽 ERASER DETECTED: \(removedCount) strokes removed (\(lastCanvasStrokeCount) → \(currentStrokes.count))")
+            print("🧽🧽🧽 ERASER USED! Sending full canvas sync...")
+            
+            // Mark activity
+            markActivity()
+            
+            // Send full canvas state so other devices sync the erasure
+            let drawingData = canvasView.drawing.dataRepresentation()
+            let syncId = UUID().uuidString
+            lastAppliedSyncId = syncId // Mark as our own so we don't reapply
+            
+            firebaseManager.sendFullCanvasSync(
+                drawingData: drawingData,
+                userId: userId,
+                canvasSize: currentCanvasSize,
+                syncId: syncId
+            )
+            
+            // Clear our stroke tracking (it's now invalid after erasure)
+            allKnownStrokes.removeAll()
+            strokeOrder.removeAll()
+            
             lastCanvasStrokeCount = currentStrokes.count
+            print("   ✅ Full canvas sync sent with \(currentStrokes.count) strokes")
         }
     }
     

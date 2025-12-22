@@ -246,6 +246,58 @@ class FirebaseManager: ObservableObject {
         }
     }
     
+    // MARK: - Full Canvas Sync (for eraser and periodic reconciliation)
+    
+    /// Send full canvas state - used after erasing or for periodic sync
+    func sendFullCanvasSync(drawingData: Data, userId: String, canvasSize: CGSize, syncId: String) {
+        guard let roomCode = currentRoomCode else { return }
+        
+        let syncRef = database.child("rooms").child(roomCode).child("fullCanvasSync")
+        
+        let data: [String: Any] = [
+            "data": drawingData.base64EncodedString(),
+            "userId": userId,
+            "syncId": syncId,
+            "timestamp": ServerValue.timestamp(),
+            "canvasWidth": canvasSize.width,
+            "canvasHeight": canvasSize.height
+        ]
+        
+        syncRef.setValue(data)
+    }
+    
+    /// Observe full canvas sync events
+    func observeFullCanvasSync(completion: @escaping (Data, String, String, CGSize?) -> Void) {
+        guard let roomCode = currentRoomCode else { return }
+        
+        let syncRef = database.child("rooms").child(roomCode).child("fullCanvasSync")
+        
+        syncRef.observe(.value) { snapshot in
+            if let data = snapshot.value as? [String: Any],
+               let base64String = data["data"] as? String,
+               let userId = data["userId"] as? String,
+               let syncId = data["syncId"] as? String,
+               let drawingData = Data(base64Encoded: base64String) {
+                
+                var canvasSize: CGSize?
+                if let width = data["canvasWidth"] as? Double,
+                   let height = data["canvasHeight"] as? Double {
+                    canvasSize = CGSize(width: width, height: height)
+                }
+                
+                completion(drawingData, userId, syncId, canvasSize)
+            }
+        }
+    }
+    
+    /// Clear all strokes from Firebase (used when full sync replaces stroke-by-stroke data)
+    func clearAllStrokes() {
+        guard let roomCode = currentRoomCode else { return }
+        
+        let strokesRef = database.child("rooms").child(roomCode).child("strokes")
+        strokesRef.removeValue()
+    }
+    
     // MARK: - Background Image Sync
     
     func sendBackgroundImage(_ imageData: Data, userId: String) {
