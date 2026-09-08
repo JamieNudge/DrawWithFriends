@@ -10,8 +10,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var pageToOpen: WebPage?
     
-    private let privacyURL = URL(string: "https://jamienudge.github.io/DrawWithFriends/privacy.html")!
-    private let supportURL = URL(string: "https://jamienudge.github.io/DrawWithFriends/support.html")!
+    private let privacyURL = URL(string: "https://jmclarenscripts.vercel.app/privacy/draw-with-friends")!
+    private let supportURL = URL(string: "https://jmclarenscripts.vercel.app/support/draw-with-friends")!
     
     private var versionText: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
