@@ -76,17 +76,24 @@ struct DrawingThumbnailView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Thumbnail placeholder
             ZStack {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.white)
                     .shadow(radius: 2)
                 
-                Image(systemName: "scribble")
-                    .font(.system(size: 40))
-                    .foregroundColor(.blue.opacity(0.3))
+                if let thumbnail = drawing.thumbnail {
+                    Image(uiImage: thumbnail)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(8)
+                } else {
+                    Image(systemName: "scribble")
+                        .font(.system(size: 40))
+                        .foregroundColor(.blue.opacity(0.3))
+                }
             }
             .frame(height: 150)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
             .onTapGesture {
                 onLoad()
             }

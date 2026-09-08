@@ -15,6 +15,8 @@ struct RoomView: View {
     @State private var isJoiningRoom = false
     @State private var selectedMode: RoomMode = .simultaneous
     @FocusState private var isRoomCodeFocused: Bool
+    @State private var showHowItWorks = false
+    @State private var showSettings = false
     
     var onRoomJoined: () -> Void
     
@@ -24,7 +26,7 @@ struct RoomView: View {
     }
     
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             // Gradient background
             LinearGradient(
                 colors: [Color.blue.opacity(0.6), Color.purple.opacity(0.6)],
@@ -158,6 +160,18 @@ struct RoomView: View {
             }
             .animation(.easeInOut(duration: 0.3), value: isRoomCodeFocused)
             
+            Button(action: { showSettings = true }) {
+                Image(systemName: "gearshape")
+                    .font(.title2)
+                    .foregroundColor(.white)
+                    .padding(12)
+                    .background(Color.black.opacity(0.2))
+                    .clipShape(Circle())
+            }
+            .accessibilityLabel("Settings")
+            .padding(.top, 8)
+            .padding(.trailing, 16)
+            
             // Tap anywhere to dismiss keyboard
             if isRoomCodeFocused {
                 Color.clear
@@ -173,6 +187,29 @@ struct RoomView: View {
         } message: {
             Text(alertMessage)
         }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(onShowHowItWorks: {
+                showHowItWorks = true
+            })
+        }
+        .onAppear {
+            if !UserDefaults.standard.bool(forKey: "hasSeenHowItWorks") {
+                showHowItWorks = true
+            }
+        }
+        .overlay {
+            if showHowItWorks {
+                ZStack {
+                    Color.black.opacity(0.7)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            dismissHowItWorks()
+                        }
+                    
+                    HowItWorksView(onDismiss: dismissHowItWorks)
+                }
+            }
+        }
         .overlay {
             if isJoiningRoom {
                 ZStack {
@@ -187,6 +224,11 @@ struct RoomView: View {
         }
     }
     
+    private func dismissHowItWorks() {
+        UserDefaults.standard.set(true, forKey: "hasSeenHowItWorks")
+        showHowItWorks = false
+    }
+    
     private func createRoom() {
         isJoiningRoom = true
         
@@ -195,14 +237,8 @@ struct RoomView: View {
         FirebaseManager.shared.createRoom(isTurnBased: isTurnBased, creatorId: UserSession.shared.userId) { roomCode in
             isJoiningRoom = false
             
-            if let code = roomCode {
-                let modeText = isTurnBased ? "Turn-Based" : "Simultaneous"
-                alertMessage = "Room created! (\(modeText))\nShare code: \(code)"
-                showAlert = true
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                    onRoomJoined()
-                }
+            if roomCode != nil {
+                onRoomJoined()
             } else {
                 alertMessage = "Failed to create room. Please try again."
                 showAlert = true
@@ -216,13 +252,20 @@ struct RoomView: View {
         isJoiningRoom = true
         
         // Access FirebaseManager only when actually needed (lazy initialization)
-        FirebaseManager.shared.joinRoom(code: roomCode) { success in
+        FirebaseManager.shared.joinRoom(code: roomCode, userId: UserSession.shared.userId) { result in
             isJoiningRoom = false
             
-            if success {
+            switch result {
+            case .joined:
                 onRoomJoined()
-            } else {
+            case .notFound:
                 alertMessage = "Room not found. Please check the code and try again."
+                showAlert = true
+            case .full:
+                alertMessage = "That room is full (4 people). Ask them to start a new room."
+                showAlert = true
+            case .expired:
+                alertMessage = "That room has expired. Create a new one and share the new code."
                 showAlert = true
             }
         }

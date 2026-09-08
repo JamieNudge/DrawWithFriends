@@ -13,6 +13,15 @@ import FirebaseDatabase
 
 class FirebaseManager: ObservableObject {
     static let shared = FirebaseManager()
+    static let maxUsersPerRoom = 4
+    static let roomIdleLimit: TimeInterval = 24 * 60 * 60
+    
+    enum JoinRoomResult {
+        case joined
+        case notFound
+        case full
+        case expired
+    }
     private var database: DatabaseReference
     
     @Published var isConnected = false
@@ -44,6 +53,7 @@ class FirebaseManager: ObservableObject {
         // Create room with metadata
         var roomData: [String: Any] = [
             "createdAt": ServerValue.timestamp(),
+            "lastActivity": ServerValue.timestamp(),
             "isActive": true,
             "mode": isTurnBased ? "turnBased" : "simultaneous"
         ]
@@ -108,15 +118,9 @@ class FirebaseManager: ObservableObject {
             return
         }
         
-        // Get all users who have drawn in the room
         let usersRef = database.child("rooms").child(roomCode).child("users")
         usersRef.observeSingleEvent(of: .value) { snapshot in
-            if let usersData = snapshot.value as? [String: Any] {
-                let userIds = Array(usersData.keys)
-                completion(userIds)
-            } else {
-                completion([])
-            }
+            completion(self.activeUserIds(from: snapshot.value as? [String: Any]))
         }
     }
     
@@ -128,19 +132,33 @@ class FirebaseManager: ObservableObject {
             "joinedAt": ServerValue.timestamp(),
             "isActive": true
         ])
+        userRef.onDisconnectUpdateChildValues(["isActive": false])
+        touchLastActivity()
     }
     
-    func joinRoom(code: String, completion: @escaping (Bool) -> Void) {
+    func joinRoom(code: String, userId: String, completion: @escaping (JoinRoomResult) -> Void) {
         let roomRef = database.child("rooms").child(code)
         
-        // Check if room exists
         roomRef.observeSingleEvent(of: .value) { snapshot in
-            if snapshot.exists() {
-                self.currentRoomCode = code
-                completion(true)
-            } else {
-                completion(false)
+            guard snapshot.exists(), let data = snapshot.value as? [String: Any] else {
+                completion(.notFound)
+                return
             }
+            
+            if self.isRoomExpired(data) {
+                roomRef.removeValue()
+                completion(.expired)
+                return
+            }
+            
+            let active = self.activeUserIds(from: data["users"] as? [String: Any])
+            if active.count >= Self.maxUsersPerRoom && !active.contains(userId) {
+                completion(.full)
+                return
+            }
+            
+            self.currentRoomCode = code
+            completion(.joined)
         }
     }
     
@@ -164,6 +182,7 @@ class FirebaseManager: ObservableObject {
         ]
         
         drawingRef.setValue(data)
+        touchLastActivity()
     }
     
     func observeSharedDrawing(completion: @escaping (Data?, String?, CGSize?, CGRect?) -> Void) {
@@ -217,6 +236,7 @@ class FirebaseManager: ObservableObject {
         ]
         
         strokeRef.setValue(data)
+        touchLastActivity()
     }
     
     func observeStrokes(completion: @escaping (String, Data, String, String, CGSize?) -> Void) {
@@ -246,6 +266,20 @@ class FirebaseManager: ObservableObject {
         }
     }
     
+    func deleteStroke(_ strokeId: String) {
+        guard let roomCode = currentRoomCode else { return }
+        database.child("rooms").child(roomCode).child("strokes").child(strokeId).removeValue()
+    }
+    
+    func observeStrokeRemoved(completion: @escaping (String) -> Void) {
+        guard let roomCode = currentRoomCode else { return }
+        
+        let strokesRef = database.child("rooms").child(roomCode).child("strokes")
+        strokesRef.observe(.childRemoved) { snapshot in
+            completion(snapshot.key)
+        }
+    }
+    
     // MARK: - Full Canvas Sync (for eraser and periodic reconciliation)
     
     /// Send full canvas state - used after erasing or for periodic sync
@@ -264,6 +298,7 @@ class FirebaseManager: ObservableObject {
         ]
         
         syncRef.setValue(data)
+        touchLastActivity()
     }
     
     /// Observe full canvas sync events
@@ -312,6 +347,7 @@ class FirebaseManager: ObservableObject {
         ]
         
         backgroundRef.setValue(data)
+        touchLastActivity()
     }
     
     func observeBackgroundImage(completion: @escaping (Data?, String?) -> Void) {
@@ -345,14 +381,71 @@ class FirebaseManager: ObservableObject {
         drawingRef.removeValue()
     }
     
-    func leaveRoom() {
+    func leaveRoom(userId: String) {
+        guard let roomCode = currentRoomCode else { return }
+        
+        stopObserving()
+        
+        let roomRef = database.child("rooms").child(roomCode)
+        let userRef = roomRef.child("users").child(userId)
+        userRef.cancelDisconnectOperations()
+        userRef.removeValue { _, _ in
+            roomRef.child("users").observeSingleEvent(of: .value) { snapshot in
+                let users = snapshot.value as? [String: Any]
+                if users == nil || users?.isEmpty == true {
+                    roomRef.removeValue()
+                    return
+                }
+                if self.activeUserIds(from: users).isEmpty {
+                    roomRef.child("backgroundImage").removeValue()
+                }
+            }
+        }
+        
         currentRoomCode = nil
+    }
+    
+    private func touchLastActivity() {
+        guard let roomCode = currentRoomCode else { return }
+        database.child("rooms").child(roomCode).child("lastActivity").setValue(ServerValue.timestamp())
+    }
+    
+    private func isRoomExpired(_ data: [String: Any]) -> Bool {
+        let last = firebaseSeconds(data["lastActivity"]) ?? firebaseSeconds(data["createdAt"])
+        guard let last else { return false }
+        return Date().timeIntervalSince1970 - last > Self.roomIdleLimit
+    }
+    
+    private func firebaseSeconds(_ value: Any?) -> TimeInterval? {
+        if let number = value as? Double {
+            return number > 10_000_000_000 ? number / 1000 : number
+        }
+        if let number = value as? Int {
+            let value = Double(number)
+            return value > 10_000_000_000 ? value / 1000 : value
+        }
+        return nil
+    }
+    
+    private func activeUserIds(from users: [String: Any]?) -> [String] {
+        guard let users else { return [] }
+        return users.compactMap { userId, raw in
+            if let info = raw as? [String: Any], let isActive = info["isActive"] as? Bool, !isActive {
+                return nil
+            }
+            return userId
+        }
     }
     
     func stopObserving() {
         guard let roomCode = currentRoomCode else { return }
-        let drawingRef = database.child("rooms").child(roomCode).child("sharedDrawing")
-        drawingRef.removeAllObservers()
+        let room = database.child("rooms").child(roomCode)
+        room.removeAllObservers()
+        room.child("sharedDrawing").removeAllObservers()
+        room.child("strokes").removeAllObservers()
+        room.child("fullCanvasSync").removeAllObservers()
+        room.child("currentTurn").removeAllObservers()
+        room.child("backgroundImage").removeAllObservers()
     }
 }
 

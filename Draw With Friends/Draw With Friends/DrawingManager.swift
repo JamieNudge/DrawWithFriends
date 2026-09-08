@@ -29,7 +29,8 @@ class DrawingManager: ObservableObject {
             id: UUID(),
             name: drawingName,
             createdAt: Date(),
-            drawing: drawing
+            drawing: drawing,
+            thumbnail: thumbnailImage(from: drawing)
         )
         
         // Save drawing data
@@ -191,7 +192,38 @@ class DrawingManager: ObservableObject {
             return
         }
         
-        savedDrawings = list.map { SavedDrawing(id: $0.id, name: $0.name, createdAt: $0.createdAt, drawing: PKDrawing()) }
+        savedDrawings = list.map { item in
+            let drawing = loadDrawing(id: item.id) ?? PKDrawing()
+            return SavedDrawing(
+                id: item.id,
+                name: item.name,
+                createdAt: item.createdAt,
+                drawing: PKDrawing(),
+                thumbnail: thumbnailImage(from: drawing)
+            )
+        }
+    }
+    
+    func thumbnailImage(from drawing: PKDrawing, maxDimension: CGFloat = 400) -> UIImage? {
+        let bounds = drawing.bounds
+        guard !bounds.isEmpty, bounds.width >= 1, bounds.height >= 1 else { return nil }
+        
+        let padded = bounds.insetBy(dx: -16, dy: -16)
+        let longest = max(padded.width, padded.height)
+        let scale = longest > maxDimension ? maxDimension / longest : 1
+        let size = CGSize(width: padded.width * scale, height: padded.height * scale)
+        
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = UIScreen.main.scale
+        format.opaque = true
+        
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            let drawingImage = drawing.image(from: padded, scale: UIScreen.main.scale)
+            drawingImage.draw(in: CGRect(origin: .zero, size: size))
+        }
     }
 }
 
@@ -202,6 +234,7 @@ struct SavedDrawing: Identifiable {
     let name: String
     let createdAt: Date
     var drawing: PKDrawing
+    var thumbnail: UIImage?
 }
 
 struct DrawingListItem: Codable {

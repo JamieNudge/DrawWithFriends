@@ -18,7 +18,7 @@ struct DrawingCanvasView: View {
     @State private var showColorPicker = false
     @State private var showSaveDialog = false
     @State private var showSavedDrawings = false
-    @State private var showExportSuccess = false
+    @State private var sharePayload: SharePayload?
     @State private var showExportError = false
     @State private var drawingName = ""
     @State private var echoModeEnabled = false
@@ -28,8 +28,21 @@ struct DrawingCanvasView: View {
     @State private var backgroundImage: UIImage?
     @State private var showCopiedConfirmation = false
     @State private var showPhotoSharingWarning = false
+    @State private var showPhotoFailed = false
     @State private var pendingPhotoItem: PhotosPickerItem?
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
+    @Environment(\.colorScheme) private var colorScheme
+    
+    /// Follows Light/Dark Mode. The canvas stays paper-white either way.
+    private var chromeBackground: Color {
+        colorScheme == .dark
+            ? Color(red: 0.11, green: 0.11, blue: 0.13)
+            : Color(red: 0.93, green: 0.93, blue: 0.95)
+    }
+    
+    private var chromeForeground: Color {
+        colorScheme == .dark ? Color.white.opacity(0.85) : Color.black.opacity(0.65)
+    }
     
     // Drawing tool state
     private enum ToolType {
@@ -51,7 +64,7 @@ struct DrawingCanvasView: View {
                     Circle()
                         .fill(selectedColor)
                         .frame(width: 36, height: 36)
-                        .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                        .overlay(Circle().stroke(chromeForeground, lineWidth: 2))
                         .shadow(radius: 1)
                 }
                 
@@ -71,38 +84,34 @@ struct DrawingCanvasView: View {
                     }
                 }
                 
+                if selectedTool == .eraser {
+                    Button(action: { allowOthersToErase.toggle() }) {
+                        Image(systemName: allowOthersToErase ? "lock.open.fill" : "lock.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 36, height: 36)
+                            .background(allowOthersToErase ? Color.orange : Color.red)
+                            .clipShape(Circle())
+                    }
+                    .accessibilityLabel(allowOthersToErase ? "Others can erase" : "Protected")
+                    .accessibilityHint("Toggle whether other people can erase this drawing")
+                }
+                
                 // Thickness slider
                 HStack(spacing: 8) {
                     Image(systemName: "line.diagonal")
                         .font(.caption2)
-                        .foregroundColor(.white.opacity(0.8))
+                        .foregroundColor(chromeForeground)
                     Slider(value: $lineWidth, in: 1...30, step: 1)
                         .frame(maxWidth: 240)
                     Text("\(Int(lineWidth))")
                         .font(.caption2)
-                        .foregroundColor(.white.opacity(0.8))
+                        .foregroundColor(chromeForeground)
                         .frame(width: 28, alignment: .leading)
                 }
             }
             
             HStack(spacing: 16) {
-                // Eraser permissions toggle (only show when eraser is selected)
-                if selectedTool == .eraser {
-                    Button(action: {
-                        allowOthersToErase.toggle()
-                    }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: allowOthersToErase ? "lock.open" : "lock")
-                            Text(allowOthersToErase ? "Others Can Erase" : "Protected")
-                                .font(.caption)
-                        }
-                        .foregroundColor(.white)
-                        .padding(8)
-                        .background(allowOthersToErase ? Color.orange : Color.red)
-                        .clipShape(Capsule())
-                    }
-                }
-                
                 // Import photo button
                 PhotosPicker(selection: $selectedPhoto, matching: .images) {
                     Image(systemName: "photo.fill")
@@ -120,8 +129,8 @@ struct DrawingCanvasView: View {
                         .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
                 }
                 
-                // Export button in toolbar
-                Button(action: exportAsImage) {
+                // Share drawing
+                Button(action: shareDrawing) {
                     Image(systemName: "square.and.arrow.up.fill")
                         .font(.system(size: 20, weight: .semibold))
                         .foregroundColor(.white)
@@ -138,19 +147,16 @@ struct DrawingCanvasView: View {
                 }
                 
                 Button(action: {
-                    if canvasViewModel.canvasView.drawing.strokes.count > 0 {
-                        var drawing = canvasViewModel.canvasView.drawing
-                        drawing.strokes.removeLast()
-                        canvasViewModel.canvasView.drawing = drawing
-                    }
+                    canvasViewModel.undoLastStroke()
                 }) {
                     Label("Undo", systemImage: "arrow.uturn.backward")
                         .labelStyle(.iconOnly)
                         .foregroundColor(.white)
                         .padding(8)
-                        .background(Color.blue)
+                        .background(canvasViewModel.canUndo ? Color.blue : Color.gray.opacity(0.5))
                         .clipShape(Capsule())
                 }
+                .disabled(!canvasViewModel.canUndo)
                 
                 // Echo Drawing Tool (works in both simultaneous and turn-based modes)
                 HStack(spacing: 8) {
@@ -221,7 +227,7 @@ struct DrawingCanvasView: View {
             }
         }
         .padding()
-        .background(Color.black.opacity(0.05))
+        .background(chromeBackground)
     }
     
     var body: some View {
@@ -255,53 +261,66 @@ struct DrawingCanvasView: View {
                 }
                 
                 // Room controls row
-                HStack {
-                    // Diagnostics button (top-left)
-                    DiagnosticsToggleButton(isShowing: $showDiagnostics)
-                    
+                HStack(spacing: 8) {
                     if let roomCode = firebaseManager.currentRoomCode {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             HStack(spacing: 4) {
                                 Text("Room Code:")
                                     .font(.subheadline)
                                     .fontWeight(.medium)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(Color(white: 0.32))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
                                 Text(roomCode)
                                     .font(.title3)
                                     .fontWeight(.bold)
-                                    .foregroundColor(.primary)
+                                    .foregroundColor(.black)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(Color.white.opacity(0.95))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.white)
                             .cornerRadius(12)
-                            .shadow(color: .black.opacity(0.1), radius: 3, x: 0, y: 2)
-                            .onAppear {
-                                print("🏠🏠🏠 THIS DEVICE IS IN ROOM: \(roomCode)")
-                                print("🏠🏠🏠 My UserId: \(UserSession.shared.userId)")
+                            .shadow(color: .black.opacity(0.18), radius: 3, x: 0, y: 2)
+                            .onLongPressGesture {
+                                showDiagnostics = true
                             }
                             
                             Button(action: {
                                 UIPasteboard.general.string = roomCode
                                 showCopiedConfirmation = true
                                 
-                                // Hide confirmation after 2 seconds
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                                     showCopiedConfirmation = false
                                 }
                             }) {
                                 Image(systemName: "doc.on.doc")
-                                    .font(.body)
+                                    .font(.caption)
                                     .foregroundColor(.white)
-                                    .padding(10)
+                                    .padding(8)
                                     .background(Color.blue)
                                     .clipShape(Circle())
-                                    .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
                             }
+                            .accessibilityLabel("Copy room code")
+                            
+                            Button(action: {
+                                sharePayload = SharePayload(items: ["Join me in Draw With Friends! Room code: \(roomCode)"])
+                            }) {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                                    .padding(8)
+                                    .background(Color.purple)
+                                    .clipShape(Circle())
+                            }
+                            .accessibilityLabel("Share room code")
                         }
+                        .layoutPriority(1)
                     }
                     
-                    Spacer()
+                    Spacer(minLength: 8)
                     
                     Button(action: clearCanvas) {
                         Image(systemName: "trash")
@@ -323,7 +342,7 @@ struct DrawingCanvasView: View {
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 8)
-                .background(Color.black.opacity(0.05))
+                .background(chromeBackground)
             }
             
             // CANVAS - Takes up remaining space
@@ -374,7 +393,7 @@ struct DrawingCanvasView: View {
             // Color picker overlay
             if showColorPicker {
                 ZStack {
-                    Color.black.opacity(0.3)
+                    Color.black.opacity(0.55)
                         .ignoresSafeArea()
                         .onTapGesture {
                             showColorPicker = false
@@ -476,9 +495,8 @@ struct DrawingCanvasView: View {
             
             // Observe background images from other users
             firebaseManager.observeBackgroundImage { imageData, userId in
-                // Only apply if it's from another user (not myself)
                 if let imageData = imageData,
-                   userId != UserSession.shared.userId,
+                   (self.backgroundImage == nil || userId != UserSession.shared.userId),
                    let image = UIImage(data: imageData) {
                     DispatchQueue.main.async {
                         self.backgroundImage = image
@@ -506,6 +524,12 @@ struct DrawingCanvasView: View {
                 canvasViewModel.loadDrawing(drawing)
             }
         }
+        .sheet(item: $sharePayload) { payload in
+            ActivityShareSheet(items: payload.items) {
+                sharePayload = nil
+            }
+            .ignoresSafeArea()
+        }
         .alert("Save Drawing", isPresented: $showSaveDialog) {
             TextField("Drawing name", text: $drawingName)
             Button("Cancel", role: .cancel) {
@@ -517,20 +541,10 @@ struct DrawingCanvasView: View {
         } message: {
             Text("Give your drawing a name")
         }
-        .alert("Exported!", isPresented: $showExportSuccess) {
+        .alert("Couldn't Share", isPresented: $showExportError) {
             Button("OK", role: .cancel) { }
         } message: {
-            Text("Drawing saved to Photos")
-        }
-        .alert("Export Failed", isPresented: $showExportError) {
-            Button("OK", role: .cancel) { }
-            Button("Open Settings") {
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
-                }
-            }
-        } message: {
-            Text("Unable to save to Photos. Please check app permissions in Settings.")
+            Text("Couldn't prepare the drawing to share.")
         }
         .alert("Share Photo with Room?", isPresented: $showPhotoSharingWarning) {
             Button("Cancel", role: .cancel) {
@@ -549,7 +563,12 @@ struct DrawingCanvasView: View {
                 pendingPhotoItem = nil
             }
         } message: {
-            Text("This photo will be uploaded to our servers and shared with everyone in your drawing room. Only import photos you're comfortable sharing.")
+            Text("This photo will be resized and shared with everyone in your room (up to 4 people). Only import photos you're comfortable sharing.")
+        }
+        .alert("Couldn't Add Photo", isPresented: $showPhotoFailed) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("That photo is too large to share in the room. Try a simpler picture.")
         }
     }
     
@@ -563,17 +582,22 @@ struct DrawingCanvasView: View {
         Task {
             if let data = try? await photoItem.loadTransferable(type: Data.self),
                let image = UIImage(data: data) {
-                backgroundImage = image
-                
-                // Compress and send to Firebase so others can see it
-                if let compressedData = image.jpegData(compressionQuality: 0.6) {
+                if let compressedData = BackgroundImageCompressor.compressedData(from: image),
+                   let displayImage = UIImage(data: compressedData) {
+                    await MainActor.run {
+                        backgroundImage = displayImage
+                    }
                     firebaseManager.sendBackgroundImage(compressedData, userId: UserSession.shared.userId)
+                } else {
+                    await MainActor.run {
+                        showPhotoFailed = true
+                    }
                 }
             }
         }
     }
     
-    private func exportAsImage() {
+    private func shareDrawing() {
         guard let image = DrawingManager.shared.exportAsImage(
             canvasViewModel.canvasView.drawing,
             backgroundImage: backgroundImage,
@@ -583,12 +607,12 @@ struct DrawingCanvasView: View {
             return
         }
         
-        DrawingManager.shared.saveToPhotos(image) { success in
-            if success {
-                showExportSuccess = true
-            } else {
-                showExportError = true
-            }
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("Draw With Friends.png")
+        do {
+            try image.pngData()?.write(to: fileURL, options: .atomic)
+            sharePayload = SharePayload(items: [fileURL])
+        } catch {
+            sharePayload = SharePayload(items: [image])
         }
     }
     
@@ -603,9 +627,7 @@ struct DrawingCanvasView: View {
     }
     
     private func leaveRoom() {
-        firebaseManager.stopObserving()
-        firebaseManager.leaveRoom()
-        // This should trigger navigation back to room selection
+        firebaseManager.leaveRoom(userId: UserSession.shared.userId)
     }
     
     // Update the active PencilKit tool based on selected tool, color and thickness
@@ -711,6 +733,7 @@ class CanvasViewModel: ObservableObject {
     @Published var statusMessage = "Loading..."
     @Published var echoModeEnabled = false
     @Published var echoCount = 2 // Number of times to echo (1 = no echo, 2-10 = limited, 0 = infinite)
+    @Published var canUndo = false
     private var echoEnabledStrokeCount = 0 // Track stroke count when echo was enabled
     
     private let firebaseManager = FirebaseManager.shared
@@ -729,6 +752,7 @@ class CanvasViewModel: ObservableObject {
     // Track what we've actually drawn vs received
     private var myStrokeCount = 0 // How many strokes I actually drew
     private var lastSyncedStrokeCount = 0 // How many strokes were in last sync
+    private var turnStartStrokeCount = 0 // Turn-based: don't undo strokes from before this turn
     
     // For simultaneous mode - stroke reconciliation system
     private struct StrokeInfo {
@@ -739,6 +763,16 @@ class CanvasViewModel: ObservableObject {
         let originalUserId: String
         var stroke: PKStroke? // Cached decoded stroke
     }
+    
+    private struct DrawingSnapshot {
+        let drawing: PKDrawing
+        let known: [String: StrokeInfo]
+        let order: [String]
+    }
+    
+    private var eraseUndoStack: [DrawingSnapshot] = []
+    private var gestureSnapshot: DrawingSnapshot?
+    private var didRecordEraseUndo = false
     
     private var allKnownStrokes: [String: StrokeInfo] = [:] // All strokes by ID (mine + others)
     private var strokeOrder: [String] = [] // Ordered list of stroke IDs (by timestamp)
@@ -812,6 +846,8 @@ class CanvasViewModel: ObservableObject {
                     print("✅ Canvas ENABLED for drawing")
                     // Reset stroke count tracking when we start our turn
                     self.lastSyncedStrokeCount = self.canvasView.drawing.strokes.count
+                    self.turnStartStrokeCount = self.canvasView.drawing.strokes.count
+                    self.updateCanUndo()
                 } else {
                     self.statusMessage = "⏳ Friend is drawing... Please wait"
                     print("🔒 Canvas DISABLED - not your turn")
@@ -825,15 +861,20 @@ class CanvasViewModel: ObservableObject {
             
             print("📨 Firebase callback: hasData=\(drawingData != nil), editor=\(lastEditor ?? "nil"), myId=\(self.userId)")
             
-            if let data = drawingData, lastEditor != self.userId {
-                print("   📥 RECEIVING from other user")
+            if let data = drawingData {
+                let catchingUp = self.canvasView.drawing.strokes.isEmpty
+                if lastEditor == self.userId && !catchingUp {
+                    print("   ⏭️ Skip: Own drawing (already on canvas)")
+                    return
+                }
+                print("   📥 RECEIVING from \(lastEditor == self.userId ? "self (rejoin)" : "other user")")
                 print("      Original canvas: \(originalSize ?? .zero)")
                 print("      Original bounds: \(originalBounds?.debugDescription ?? "nil")")
                 print("      My canvas: \(self.currentCanvasSize)")
                 print("      isMyTurn: \(self.isMyTurn)")
                 
-                // Skip if it's not our turn (shouldn't be receiving updates during our turn)
-                if self.isMyTurn {
+                // Don't overwrite while we are mid-turn with ink already on the canvas.
+                if self.isMyTurn && !catchingUp {
                     print("      ⏭️ Skip: It's my turn")
                     return
                 }
@@ -883,7 +924,7 @@ class CanvasViewModel: ObservableObject {
                     self.isReceivingUpdate = false
                 }
             } else {
-                print("   ⏭️ Skip: No data or from myself")
+                print("   ⏭️ Skip: No shared drawing yet")
             }
         }
         
@@ -924,14 +965,22 @@ class CanvasViewModel: ObservableObject {
             return
         }
         
-        // Don't sync empty drawings
+        // Don't sync empty drawings unless we just undid/cleared down to empty
         if currentCount == 0 {
-            print("   ⏸️ Skip: Drawing is empty")
+            if lastSyncedStrokeCount > 0 {
+                markActivity()
+                diagnostics.logInfo("   ✅ SENDING empty canvas after undo/clear")
+                firebaseManager.sendDrawing(currentDrawing.dataRepresentation(), userId: userId, canvasSize: currentCanvasSize, drawingBounds: currentDrawing.bounds)
+                lastLocalDrawing = currentDrawing.dataRepresentation()
+                lastSyncedStrokeCount = 0
+            } else {
+                print("   ⏸️ Skip: Drawing is empty")
+            }
             return
         }
         
-        // Only sync if we have NEW strokes since last sync
-        if currentCount > lastSyncedStrokeCount {
+        // Sync when stroke count changes (new strokes or undo)
+        if currentCount != lastSyncedStrokeCount {
             // Mark activity to keep sync timer alive
             markActivity()
             
@@ -1064,17 +1113,14 @@ class CanvasViewModel: ObservableObject {
             // Log the received stroke
             self.diagnostics.logStrokeReceived(strokeId: strokeId, fromUser: senderId, isOwn: isOwnStroke)
             
-            // Ignore my own strokes (already in allKnownStrokes)
+            // Already on this canvas (we just drew it). Skip the Firebase echo.
             if self.allKnownStrokes[strokeId] != nil {
                 return
             }
             
-            // Don't add own strokes
-            if isOwnStroke {
-                return
-            }
+            // Rejoin / late join: still add our own strokes. We only skip them
+            // when they are already in allKnownStrokes (live drawing).
             
-            // Mark activity to keep sync timer alive when receiving strokes
             self.markActivity()
             
             // Add to our known strokes collection
@@ -1097,6 +1143,7 @@ class CanvasViewModel: ObservableObject {
             }
             
             self.rebuildCanvas()
+            self.updateCanUndo()
             
             // NOTE: We do NOT echo received strokes!
             // Echo mode only applies to YOUR OWN strokes (in captureNewLocalStrokes).
@@ -1109,8 +1156,9 @@ class CanvasViewModel: ObservableObject {
         firebaseManager.observeFullCanvasSync { [weak self] (drawingData: Data, senderId: String, syncId: String, canvasSize: CGSize?) in
             guard let self = self else { return }
             
-            // Ignore our own syncs
-            if senderId == self.userId {
+            // Ignore a sync we just sent (live echo). Apply it if this canvas is
+            // empty — that's a rejoin and we need the saved picture.
+            if senderId == self.userId && !self.canvasView.drawing.strokes.isEmpty {
                 print("🔄 Ignoring own full canvas sync")
                 return
             }
@@ -1148,11 +1196,23 @@ class CanvasViewModel: ObservableObject {
                 
                 self.isReceivingUpdate = true
                 self.canvasView.drawing = finalDrawing
-                self.lastCanvasStrokeCount = finalDrawing.strokes.count
+                self.rehydrateTrackingFromCanvas()
                 self.isReceivingUpdate = false
+                self.updateCanUndo()
                 
                 print("   ✅ Applied full canvas sync: \(finalDrawing.strokes.count) strokes")
             }
+        }
+        
+        firebaseManager.observeStrokeRemoved { [weak self] strokeId in
+            guard let self = self else { return }
+            guard self.allKnownStrokes[strokeId] != nil else { return }
+            
+            print("🗑️ Remote stroke removed: \(strokeId.prefix(8))")
+            self.allKnownStrokes.removeValue(forKey: strokeId)
+            self.strokeOrder.removeAll { $0 == strokeId }
+            self.rebuildCanvas()
+            self.updateCanUndo()
         }
         
         print("   Setting up sync timer (0.5s interval)...")
@@ -1191,7 +1251,10 @@ class CanvasViewModel: ObservableObject {
             return
         }
         
-        captureNewLocalStrokes()
+        // Don't snapshot an in-progress stroke — wait until the tool lifts.
+        if !isUserDrawing {
+            captureNewLocalStrokes()
+        }
         
         // Periodic full canvas sync to prevent divergence
         let timeSinceLastFullSync = Date().timeIntervalSince(lastFullSyncTime)
@@ -1308,41 +1371,236 @@ class CanvasViewModel: ObservableObject {
             }
             
             lastCanvasStrokeCount = currentStrokes.count
+            updateCanUndo()
             
         } else if currentStrokes.count < lastCanvasStrokeCount {
-            // Canvas was cleared or strokes removed (ERASER USED!)
-            let removedCount = lastCanvasStrokeCount - currentStrokes.count
-            diagnostics.logWarning("🧽 ERASER DETECTED: \(removedCount) strokes removed (\(lastCanvasStrokeCount) → \(currentStrokes.count))")
-            print("🧽🧽🧽 ERASER USED! Sending full canvas sync...")
-            
-            // Mark activity
-            markActivity()
-            
-            // Send full canvas state so other devices sync the erasure
-            let drawingData = canvasView.drawing.dataRepresentation()
+            recordEraseUndoIfNeeded()
+            handleStrokesRemoved()
+        } else if drawingWasModifiedInPlace() {
+            recordEraseUndoIfNeeded()
+            handleStrokesRemoved()
+        }
+    }
+    
+    private func currentSnapshot() -> DrawingSnapshot {
+        DrawingSnapshot(
+            drawing: canvasView.drawing,
+            known: allKnownStrokes,
+            order: strokeOrder
+        )
+    }
+    
+    private func drawingWasModifiedInPlace() -> Bool {
+        guard let before = gestureSnapshot?.drawing else { return false }
+        let after = canvasView.drawing
+        return after.strokes.count == before.strokes.count
+            && after.dataRepresentation() != before.dataRepresentation()
+    }
+    
+    private func recordEraseUndoIfNeeded() {
+        guard !didRecordEraseUndo, let snapshot = gestureSnapshot else { return }
+        guard snapshot.drawing.dataRepresentation() != canvasView.drawing.dataRepresentation() else { return }
+        
+        // In simultaneous mode, new strokes are undone by ID so we don't restore a whole canvas
+        // (that would wipe marks a friend added after you).
+        if roomMode != "turnBased" {
+            let beforeCount = snapshot.drawing.strokes.count
+            let afterCount = canvasView.drawing.strokes.count
+            guard afterCount <= beforeCount else { return }
+        }
+        
+        eraseUndoStack.append(snapshot)
+        if eraseUndoStack.count > 20 {
+            eraseUndoStack.removeFirst()
+        }
+        didRecordEraseUndo = true
+        diagnostics.logInfo("Undo stack: recorded canvas snapshot (\(eraseUndoStack.count))")
+    }
+    
+    private func restoreEraseUndo() -> Bool {
+        guard let snapshot = eraseUndoStack.popLast() else { return false }
+        
+        diagnostics.logInfo("Undo last erase")
+        isReceivingUpdate = true
+        canvasView.drawing = snapshot.drawing
+        allKnownStrokes = snapshot.known
+        strokeOrder = snapshot.order
+        lastCanvasStrokeCount = snapshot.drawing.strokes.count
+        isReceivingUpdate = false
+        
+        if roomMode == "turnBased" {
+            if isMyTurn {
+                firebaseManager.sendDrawing(
+                    snapshot.drawing.dataRepresentation(),
+                    userId: userId,
+                    canvasSize: currentCanvasSize,
+                    drawingBounds: snapshot.drawing.bounds
+                )
+                lastLocalDrawing = snapshot.drawing.dataRepresentation()
+                lastSyncedStrokeCount = snapshot.drawing.strokes.count
+            }
+        } else {
             let syncId = UUID().uuidString
-            lastAppliedSyncId = syncId // Mark as our own so we don't reapply
-            
+            lastAppliedSyncId = syncId
             firebaseManager.sendFullCanvasSync(
-                drawingData: drawingData,
+                drawingData: snapshot.drawing.dataRepresentation(),
                 userId: userId,
                 canvasSize: currentCanvasSize,
                 syncId: syncId
             )
-            
-            // Clear our stroke tracking (it's now invalid after erasure)
-            allKnownStrokes.removeAll()
-            strokeOrder.removeAll()
-            
-            lastCanvasStrokeCount = currentStrokes.count
-            print("   ✅ Full canvas sync sent with \(currentStrokes.count) strokes")
+            lastFullSyncTime = Date()
         }
+        
+        updateCanUndo()
+        return true
+    }
+    
+    /// Undo the last local erase first, then the current user's last stroke.
+    func undoLastStroke() {
+        guard !isReceivingUpdate, !isRebuilding else { return }
+        
+        if restoreEraseUndo() {
+            return
+        }
+        
+        if roomMode == "turnBased" {
+            undoLastTurnBasedStroke()
+            return
+        }
+        
+        // Make sure a stroke we just finished is tracked before we try to undo it.
+        captureNewLocalStrokes()
+        
+        guard let strokeId = lastOwnStrokeId() else {
+            diagnostics.logInfo("Undo ignored — no own strokes to remove")
+            updateCanUndo()
+            return
+        }
+        
+        diagnostics.logInfo("Undo own stroke \(strokeId.prefix(8))")
+        allKnownStrokes.removeValue(forKey: strokeId)
+        strokeOrder.removeAll { $0 == strokeId }
+        firebaseManager.deleteStroke(strokeId)
+        rebuildCanvas()
+        updateCanUndo()
+    }
+    
+    private func undoLastTurnBasedStroke() {
+        guard isMyTurn else { return }
+        guard canvasView.drawing.strokes.count > turnStartStrokeCount else {
+            diagnostics.logInfo("Undo ignored — no strokes from this turn")
+            updateCanUndo()
+            return
+        }
+        
+        var drawing = canvasView.drawing
+        drawing.strokes.removeLast()
+        isReceivingUpdate = true
+        canvasView.drawing = drawing
+        isReceivingUpdate = false
+        
+        handleStrokesRemoved()
+        updateCanUndo()
+    }
+    
+    private func lastOwnStrokeId() -> String? {
+        for strokeId in strokeOrder.reversed() {
+            if allKnownStrokes[strokeId]?.originalUserId == userId {
+                return strokeId
+            }
+        }
+        return nil
+    }
+    
+    private func updateCanUndo() {
+        let value: Bool
+        if roomMode == "turnBased" {
+            value = isMyTurn && (!eraseUndoStack.isEmpty || canvasView.drawing.strokes.count > turnStartStrokeCount)
+        } else {
+            value = !eraseUndoStack.isEmpty || lastOwnStrokeId() != nil
+        }
+        if canUndo != value {
+            canUndo = value
+        }
+    }
+    
+    /// After eraser/undo: broadcast the current canvas and rebuild local stroke tracking
+    /// so the next incoming stroke cannot replace the whole drawing with a partial list.
+    private func handleStrokesRemoved() {
+        let currentStrokes = canvasView.drawing.strokes
+        let removedCount = max(0, lastCanvasStrokeCount - currentStrokes.count)
+        diagnostics.logWarning("🧽 STROKES REMOVED: \(removedCount) (\(lastCanvasStrokeCount) → \(currentStrokes.count))")
+        
+        markActivity()
+        
+        if roomMode == "turnBased" {
+            if isMyTurn {
+                let drawing = canvasView.drawing
+                firebaseManager.sendDrawing(
+                    drawing.dataRepresentation(),
+                    userId: userId,
+                    canvasSize: currentCanvasSize,
+                    drawingBounds: drawing.bounds
+                )
+                lastLocalDrawing = drawing.dataRepresentation()
+                lastSyncedStrokeCount = drawing.strokes.count
+            }
+            lastCanvasStrokeCount = currentStrokes.count
+            updateCanUndo()
+            return
+        }
+        
+        let drawingData = canvasView.drawing.dataRepresentation()
+        let syncId = UUID().uuidString
+        lastAppliedSyncId = syncId
+        
+        firebaseManager.sendFullCanvasSync(
+            drawingData: drawingData,
+            userId: userId,
+            canvasSize: currentCanvasSize,
+            syncId: syncId
+        )
+        firebaseManager.clearAllStrokes()
+        lastFullSyncTime = Date()
+        
+        rehydrateTrackingFromCanvas()
+        updateCanUndo()
+        print("   ✅ Full canvas sync sent with \(currentStrokes.count) strokes")
+    }
+    
+    /// Rebuild allKnownStrokes from whatever is currently on the canvas.
+    /// Used after a full sync so rebuildCanvas() still has the full picture.
+    private func rehydrateTrackingFromCanvas() {
+        allKnownStrokes.removeAll()
+        strokeOrder.removeAll()
+        echoedStrokeIds.removeAll()
+        strokeEchoCounts.removeAll()
+        
+        let timestamp = Date().timeIntervalSince1970
+        for (index, stroke) in canvasView.drawing.strokes.enumerated() {
+            let strokeId = "local-\(UUID().uuidString)"
+            var singleStrokeDrawing = PKDrawing()
+            singleStrokeDrawing.strokes = [stroke]
+            
+            allKnownStrokes[strokeId] = StrokeInfo(
+                id: strokeId,
+                data: singleStrokeDrawing.dataRepresentation(),
+                timestamp: timestamp + Double(index) * 0.001,
+                originalSize: currentCanvasSize,
+                originalUserId: "synced",
+                stroke: stroke
+            )
+            strokeOrder.append(strokeId)
+        }
+        
+        lastCanvasStrokeCount = canvasView.drawing.strokes.count
     }
     
     // Rebuild canvas from all known strokes (reconciliation)
     private func rebuildCanvas() {
         guard !isRebuilding else {
-            diagnostics.logWarning("Already rebuilding, skipping")
+            diagnostics.logWarning("Already rebuilding, will retry")
+            needsRebuild = true
             return
         }
         
@@ -1404,6 +1662,12 @@ class CanvasViewModel: ObservableObject {
             self.isReceivingUpdate = false
             self.isRebuilding = false
             self.diagnostics.updateMetrics(roomCode: nil, userId: nil, isRebuilding: false)
+            self.updateCanUndo()
+            
+            if self.needsRebuild && !self.isUserDrawing {
+                self.needsRebuild = false
+                self.rebuildCanvas()
+            }
         }
     }
     
@@ -1476,19 +1740,25 @@ class CanvasViewModel: ObservableObject {
     
     // Reset stroke tracking (for canvas clear)
     func resetStrokeTracking() {
+        eraseUndoStack.removeAll()
+        gestureSnapshot = nil
+        didRecordEraseUndo = false
         allKnownStrokes.removeAll()
         strokeOrder.removeAll()
         lastCanvasStrokeCount = 0
         echoedStrokeIds.removeAll()
         strokeEchoCounts.removeAll()
         print("🧹 Stroke tracking reset")
+        updateCanUndo()
     }
     
     // MARK: - Common
     
     func handleDrawingStarted() {
         isUserDrawing = true
-        markActivity() // Resume sync timer on user activity
+        markActivity()
+        didRecordEraseUndo = false
+        gestureSnapshot = currentSnapshot()
         diagnostics.logUserDrawing(started: true)
     }
     
@@ -1507,6 +1777,11 @@ class CanvasViewModel: ObservableObject {
                 // First, capture any local strokes
                 self.captureNewLocalStrokes()
                 
+                // PencilKit can commit the first stroke a beat late; try once more.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    self?.captureNewLocalStrokes()
+                }
+                
                 // Then, if there was a deferred rebuild OR if new strokes arrived during the 50ms wait, rebuild now
                 if self.needsRebuild {
                     self.diagnostics.logInfo("Executing deferred rebuild")
@@ -1514,8 +1789,10 @@ class CanvasViewModel: ObservableObject {
                     self.rebuildCanvas()
                 }
             } else {
+                self.recordEraseUndoIfNeeded()
                 // For TURN-BASED mode: add echoes directly to canvas
                 self.addEchoesToCanvas()
+                self.updateCanUndo()
             }
         }
     }
@@ -1565,8 +1842,17 @@ class CanvasViewModel: ObservableObject {
     }
     
     func handleDrawingChange(_ drawing: PKDrawing) {
-        // Mode-specific syncing happens in timers
         print("✏️ Drawing changed: \(drawing.strokes.count) strokes, isMyTurn=\(isMyTurn), isReceiving=\(isReceivingUpdate)")
+        guard !isReceivingUpdate, !isRebuilding else { return }
+        
+        if roomMode != "turnBased" {
+            // Don't snapshot an in-progress erase; wait until the tool lifts.
+            if !isUserDrawing {
+                captureNewLocalStrokes()
+            }
+        } else {
+            updateCanUndo()
+        }
     }
     
     func setColor(_ color: Color) {
