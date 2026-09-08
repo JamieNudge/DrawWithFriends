@@ -349,7 +349,9 @@ struct DrawingCanvasView: View {
             // on phone and iPad — scaling both ways independently was not invertible.
             GeometryReader { geometry in
                 let paper = canvasViewModel.paperSize.width > 1 ? canvasViewModel.paperSize : geometry.size
-                let fitted = CanvasViewModel.aspectFit(paper, in: geometry.size)
+                let fitted = canvasViewModel.fittedSize.width > 1
+                    ? canvasViewModel.fittedSize
+                    : CanvasViewModel.aspectFit(paper, in: geometry.size)
                 ZStack {
                     chromeBackground
                     
@@ -675,30 +677,31 @@ struct CanvasView: UIViewRepresentable {
     var onDrawingStarted: () -> Void
     var onDrawingEnded: () -> Void
     
-    func makeUIView(context: Context) -> PKCanvasView {
+    func makeUIView(context: Context) -> CanvasHostView {
         canvasView.tool = PKInkingTool(.pen, color: .black, width: 3)
         canvasView.drawingPolicy = .anyInput
         canvasView.delegate = context.coordinator
         canvasView.contentInsetAdjustmentBehavior = .never
         canvasView.automaticallyAdjustsScrollIndicatorInsets = false
+        canvasView.showsVerticalScrollIndicator = false
+        canvasView.showsHorizontalScrollIndicator = false
+        canvasView.isScrollEnabled = false
+        canvasView.bounces = false
+        canvasView.alwaysBounceVertical = false
+        canvasView.alwaysBounceHorizontal = false
+        canvasView.minimumZoomScale = 1
+        canvasView.maximumZoomScale = 1
+        canvasView.zoomScale = 1
         
-        // Enable zoom for detail work
-        canvasView.minimumZoomScale = 0.5  // Zoom out to 50%
-        canvasView.maximumZoomScale = 4.0  // Zoom in to 400%
-        canvasView.zoomScale = 1.0
-        
-        // White background so all colors are visible in both light and dark mode
         canvasView.backgroundColor = .white
         canvasView.isOpaque = true
-        
-        // Force light mode for the canvas so it always shows white background
         canvasView.overrideUserInterfaceStyle = .light
         
-        return canvasView
+        return CanvasHostView(canvas: canvasView)
     }
     
-    func updateUIView(_ uiView: PKCanvasView, context: Context) {
-        // Updates handled by coordinator
+    func updateUIView(_ uiView: CanvasHostView, context: Context) {
+        uiView.canvas.delegate = context.coordinator
     }
     
     func makeCoordinator() -> Coordinator {
@@ -736,6 +739,40 @@ struct CanvasView: UIViewRepresentable {
     }
 }
 
+/// Pins PKCanvasView to the SwiftUI frame so a full drawing cannot grow the paper.
+final class CanvasHostView: UIView {
+    let canvas: PKCanvasView
+    
+    init(canvas: PKCanvasView) {
+        self.canvas = canvas
+        super.init(frame: .zero)
+        clipsToBounds = true
+        addSubview(canvas)
+        setContentHuggingPriority(.defaultLow, for: .horizontal)
+        setContentHuggingPriority(.defaultLow, for: .vertical)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+    }
+    
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    override var intrinsicContentSize: CGSize { .zero }
+    
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        canvas.frame = bounds
+        if canvas.zoomScale != 1 {
+            canvas.zoomScale = 1
+        }
+        if canvas.contentOffset != .zero {
+            canvas.contentOffset = .zero
+        }
+    }
+}
+
 // MARK: - ViewModel
 
 class CanvasViewModel: ObservableObject {
@@ -755,6 +792,7 @@ class CanvasViewModel: ObservableObject {
     private var lastLocalDrawing: Data?
     private var roomMode: String?
     @Published var paperSize: CGSize = .zero
+    @Published var fittedSize: CGSize = .zero
     var currentCanvasSize: CGSize = .zero // Fitted local PKCanvasView; strokes on the wire use paperSize
     private var lastWindowSize: CGSize = .zero
     
@@ -853,6 +891,12 @@ class CanvasViewModel: ObservableObject {
     /// room usually wins and becomes the shared paper.
     func noteWindowSize(_ window: CGSize) {
         guard window.width > 32, window.height > 32 else { return }
+        if lastWindowSize.width > 1 {
+            let dw = abs(window.width - lastWindowSize.width)
+            let dh = abs(window.height - lastWindowSize.height)
+            // PencilKit scrollbars / rebuilds jitter a few points. Ignore that.
+            if dw < 4 && dh < 4 { return }
+        }
         lastWindowSize = window
         if paperSize.width <= 1 {
             paperSize = window
@@ -879,7 +923,11 @@ class CanvasViewModel: ObservableObject {
     private func syncLocalCanvasSize() {
         let window = lastWindowSize.width > 1 ? lastWindowSize : paperSize
         let paper = sharedPaperSize
-        currentCanvasSize = Self.aspectFit(paper, in: window.width > 1 ? window : paper)
+        let fitted = Self.aspectFit(paper, in: window.width > 1 ? window : paper)
+        currentCanvasSize = fitted
+        if abs(fittedSize.width - fitted.width) > 1 || abs(fittedSize.height - fitted.height) > 1 {
+            fittedSize = fitted
+        }
     }
     
     private var sharedPaperSize: CGSize {
