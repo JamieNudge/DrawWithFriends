@@ -99,7 +99,7 @@ class DrawingManager: ObservableObject {
             
             // Context is already transparent (opaque: false in beginImageContext)
             // Render the drawing into the transparent context
-            let drawingImage = drawing.image(from: CGRect(origin: .zero, size: imageSize), scale: 1.0)
+            let drawingImage = rasterize(drawing, from: CGRect(origin: .zero, size: imageSize), scale: 1.0)
             drawingImage.draw(in: CGRect(origin: .zero, size: imageSize))
             
             let image = UIGraphicsGetImageFromCurrentImageContext()
@@ -124,7 +124,7 @@ class DrawingManager: ObservableObject {
                 }
                 
                 // Draw the PencilKit drawing
-                let drawingImage = drawing.image(from: CGRect(origin: .zero, size: imageSize), scale: UIScreen.main.scale)
+                let drawingImage = rasterize(drawing, from: CGRect(origin: .zero, size: imageSize), scale: UIScreen.main.scale)
                 drawingImage.draw(in: CGRect(origin: .zero, size: imageSize))
             }
         }
@@ -175,6 +175,16 @@ class DrawingManager: ObservableObject {
     
     // MARK: - Private Helpers
     
+    /// PencilKit inverts black ink in Dark Mode. The canvas is always paper-white,
+    /// so share/thumbnails must rasterize as light or dark lines vanish on white.
+    private func rasterize(_ drawing: PKDrawing, from rect: CGRect, scale: CGFloat) -> UIImage {
+        var image: UIImage!
+        UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
+            image = drawing.image(from: rect, scale: scale)
+        }
+        return image
+    }
+    
     private func getDocumentsDirectory() -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
@@ -221,7 +231,7 @@ class DrawingManager: ObservableObject {
         return renderer.image { context in
             UIColor.white.setFill()
             context.fill(CGRect(origin: .zero, size: size))
-            let drawingImage = drawing.image(from: padded, scale: UIScreen.main.scale)
+            let drawingImage = rasterize(drawing, from: padded, scale: UIScreen.main.scale)
             drawingImage.draw(in: CGRect(origin: .zero, size: size))
         }
     }
