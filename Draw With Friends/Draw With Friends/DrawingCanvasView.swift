@@ -345,42 +345,52 @@ struct DrawingCanvasView: View {
                 .background(chromeBackground)
             }
             
-            // CANVAS - Takes up remaining space
+            // Shared room paper, aspect-fitted into this device. Same coordinates
+            // on phone and iPad — scaling both ways independently was not invertible.
             GeometryReader { geometry in
+                let paper = canvasViewModel.paperSize.width > 1 ? canvasViewModel.paperSize : geometry.size
+                let fitted = CanvasViewModel.aspectFit(paper, in: geometry.size)
                 ZStack {
-                    // Default light background
-                    Color(white: 0.98)
+                    chromeBackground
                     
-                    // Background image if selected
-                    if let backgroundImage = backgroundImage {
-                        Image(uiImage: backgroundImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: geometry.size.width, height: geometry.size.height)
-                            .clipped()
-                    }
-                    
-                    // Drawing canvas on top
-                    CanvasView(
-                        canvasView: $canvasViewModel.canvasView,
-                        onDrawingChanged: { drawing in
-                            canvasViewModel.handleDrawingChange(drawing)
-                        },
-                        onDrawingStarted: {
-                            canvasViewModel.handleDrawingStarted()
-                        },
-                        onDrawingEnded: {
-                            canvasViewModel.handleDrawingEnded()
+                    ZStack {
+                        Color(white: 0.98)
+                        
+                        if let backgroundImage = backgroundImage {
+                            Image(uiImage: backgroundImage)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: fitted.width, height: fitted.height)
+                                .clipped()
                         }
-                    )
+                        
+                        CanvasView(
+                            canvasView: $canvasViewModel.canvasView,
+                            onDrawingChanged: { drawing in
+                                canvasViewModel.handleDrawingChange(drawing)
+                            },
+                            onDrawingStarted: {
+                                canvasViewModel.handleDrawingStarted()
+                            },
+                            onDrawingEnded: {
+                                canvasViewModel.handleDrawingEnded()
+                            }
+                        )
+                    }
+                    .frame(width: fitted.width, height: fitted.height)
+                    .clipped()
                 }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
                 .onAppear {
-                    canvasViewModel.currentCanvasSize = geometry.size
+                    canvasViewModel.noteWindowSize(geometry.size)
+                    CanvasOrientationLock.apply()
                 }
                 .onChange(of: geometry.size) { newSize in
-                    canvasViewModel.currentCanvasSize = newSize
+                    canvasViewModel.noteWindowSize(newSize)
                 }
             }
+            .background(CanvasOrientationLockProbe())
             
             // TOOLS - Bottom bar
             toolbarView
@@ -669,6 +679,8 @@ struct CanvasView: UIViewRepresentable {
         canvasView.tool = PKInkingTool(.pen, color: .black, width: 3)
         canvasView.drawingPolicy = .anyInput
         canvasView.delegate = context.coordinator
+        canvasView.contentInsetAdjustmentBehavior = .never
+        canvasView.automaticallyAdjustsScrollIndicatorInsets = false
         
         // Enable zoom for detail work
         canvasView.minimumZoomScale = 0.5  // Zoom out to 50%
@@ -742,7 +754,9 @@ class CanvasViewModel: ObservableObject {
     private var syncTimer: Timer?
     private var lastLocalDrawing: Data?
     private var roomMode: String?
-    var currentCanvasSize: CGSize = .zero
+    @Published var paperSize: CGSize = .zero
+    var currentCanvasSize: CGSize = .zero // Fitted local PKCanvasView; strokes on the wire use paperSize
+    private var lastWindowSize: CGSize = .zero
     
     // Smart timer management - pause during inactivity
     private var lastActivityTime: Date = Date()
@@ -783,10 +797,9 @@ class CanvasViewModel: ObservableObject {
     private var echoedStrokeIds: Set<String> = [] // Track echoed strokes
     private var strokeEchoCounts: [String: Int] = [:] // Track echo counts for limited echo mode
     
-    // Full canvas sync tracking (for eraser and periodic reconciliation)
-    private var lastAppliedSyncId: String = "" // Track last sync ID we applied to avoid loops
-    private var lastFullSyncTime: Date = Date() // For periodic full sync
-    private let fullSyncInterval: TimeInterval = 15.0 // Full sync every 15 seconds
+    // Full canvas sync tracking (for eraser)
+    private var lastAppliedSyncId: String = ""
+    private var lastFullSyncTime: Date = Date()
     
     private var userId: String {
         return UserSession.shared.userId
@@ -799,6 +812,12 @@ class CanvasViewModel: ObservableObject {
         
         // Register user in room
         firebaseManager.registerUserInRoom(userId: userId)
+        
+        firebaseManager.observePaperSize { [weak self] size in
+            DispatchQueue.main.async {
+                self?.applyRoomPaper(size)
+            }
+        }
         
         // Get the room mode
         firebaseManager.getRoomMode { [weak self] (mode: String?) in
@@ -819,6 +838,80 @@ class CanvasViewModel: ObservableObject {
             }
             
             self.diagnostics.logConnection(status: "Connected")
+        }
+    }
+    
+    static func aspectFit(_ paper: CGSize, in window: CGSize) -> CGSize {
+        guard paper.width > 1, paper.height > 1, window.width > 1, window.height > 1 else {
+            return window
+        }
+        let scale = min(window.width / paper.width, window.height / paper.height)
+        return CGSize(width: paper.width * scale, height: paper.height * scale)
+    }
+    
+    /// Window size of this device. iPhone waits briefly so an iPad in the same
+    /// room usually wins and becomes the shared paper.
+    func noteWindowSize(_ window: CGSize) {
+        guard window.width > 32, window.height > 32 else { return }
+        lastWindowSize = window
+        if paperSize.width <= 1 {
+            paperSize = window
+        }
+        syncLocalCanvasSize()
+        
+        let delay: TimeInterval = UIDevice.current.userInterfaceIdiom == .phone ? 0.45 : 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.firebaseManager.publishPaperSizeIfNeeded(window)
+        }
+    }
+    
+    private func applyRoomPaper(_ paper: CGSize) {
+        guard paper.width > 32, paper.height > 32 else { return }
+        let changed = abs(paper.width - paperSize.width) > 0.5 || abs(paper.height - paperSize.height) > 0.5
+        paperSize = paper
+        syncLocalCanvasSize()
+        if changed && !allKnownStrokes.isEmpty {
+            invalidateCachedStrokes()
+            rebuildCanvas()
+        }
+    }
+    
+    private func syncLocalCanvasSize() {
+        let window = lastWindowSize.width > 1 ? lastWindowSize : paperSize
+        let paper = sharedPaperSize
+        currentCanvasSize = Self.aspectFit(paper, in: window.width > 1 ? window : paper)
+    }
+    
+    private var sharedPaperSize: CGSize {
+        paperSize.width > 1 ? paperSize : currentCanvasSize
+    }
+    
+    /// Uniform scale with origin pinned. Views are aspect-fitted to the paper,
+    /// so this is invertible: localToPaper then paperToLocal is identity.
+    private func mapDrawing(_ drawing: PKDrawing, from: CGSize, to: CGSize) -> PKDrawing {
+        guard from.width > 1, from.height > 1, to.width > 1, to.height > 1 else { return drawing }
+        if abs(from.width - to.width) < 0.5 && abs(from.height - to.height) < 0.5 {
+            return drawing
+        }
+        let scale = to.width / from.width
+        guard scale.isFinite, scale > 0 else { return drawing }
+        return drawing.transformed(using: CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: 0, ty: 0))
+    }
+    
+    private func drawingToPaper(_ drawing: PKDrawing) -> PKDrawing {
+        mapDrawing(drawing, from: currentCanvasSize, to: sharedPaperSize)
+    }
+    
+    private func drawingFromPaper(_ drawing: PKDrawing, originalSize: CGSize?) -> PKDrawing {
+        let from = originalSize ?? sharedPaperSize
+        return mapDrawing(drawing, from: from, to: currentCanvasSize)
+    }
+    
+    private func invalidateCachedStrokes() {
+        for id in Array(allKnownStrokes.keys) {
+            guard var info = allKnownStrokes[id] else { continue }
+            info.stroke = nil
+            allKnownStrokes[id] = info
         }
     }
     
@@ -886,26 +979,7 @@ class CanvasViewModel: ObservableObject {
                 
                 if var drawing = try? PKDrawing(data: data) {
                     print("      ✅ Decoded: \(drawing.strokes.count) strokes")
-                    
-                    // Scale drawing based on content bounds if available, otherwise use canvas size
-                    if let origSize = originalSize, let origBounds = originalBounds, 
-                       self.currentCanvasSize != .zero, origSize != self.currentCanvasSize {
-                        print("      🔄 SCALING using content-aware method")
-                        let before = drawing.bounds
-                        drawing = self.scaleDrawingContentAware(drawing, 
-                                                                 originalCanvas: origSize, 
-                                                                 originalBounds: origBounds,
-                                                                 targetCanvas: self.currentCanvasSize)
-                        print("      📐 Bounds: \(before) → \(drawing.bounds)")
-                    } else if let origSize = originalSize, self.currentCanvasSize != .zero, origSize != self.currentCanvasSize {
-                        // Fallback to simple canvas scaling
-                        print("      🔄 SCALING from \(origSize) to \(self.currentCanvasSize)")
-                        let before = drawing.bounds
-                        drawing = self.scaleDrawing(drawing, from: origSize, to: self.currentCanvasSize)
-                        print("      📐 Bounds: \(before) → \(drawing.bounds)")
-                    } else {
-                        print("      ⏸️ No scaling (sizes match or unavailable)")
-                    }
+                    drawing = self.drawingFromPaper(drawing, originalSize: originalSize)
                     
                     DispatchQueue.main.async {
                         print("      🖼️ Applying to canvas")
@@ -970,7 +1044,7 @@ class CanvasViewModel: ObservableObject {
             if lastSyncedStrokeCount > 0 {
                 markActivity()
                 diagnostics.logInfo("   ✅ SENDING empty canvas after undo/clear")
-                firebaseManager.sendDrawing(currentDrawing.dataRepresentation(), userId: userId, canvasSize: currentCanvasSize, drawingBounds: currentDrawing.bounds)
+                firebaseManager.sendDrawing(self.drawingToPaper(currentDrawing).dataRepresentation(), userId: userId, canvasSize: self.sharedPaperSize, drawingBounds: self.drawingToPaper(currentDrawing).bounds)
                 lastLocalDrawing = currentDrawing.dataRepresentation()
                 lastSyncedStrokeCount = 0
             } else {
@@ -984,114 +1058,15 @@ class CanvasViewModel: ObservableObject {
             // Mark activity to keep sync timer alive
             markActivity()
             
-            let drawingBounds = currentDrawing.bounds
-            diagnostics.logInfo("   ✅ SENDING: \(currentCount) strokes (was \(lastSyncedStrokeCount)), canvas: \(currentCanvasSize), bounds: \(drawingBounds)")
-            let newData = currentDrawing.dataRepresentation()
-            firebaseManager.sendDrawing(newData, userId: userId, canvasSize: currentCanvasSize, drawingBounds: drawingBounds)
+            let paperDrawing = drawingToPaper(currentDrawing)
+            diagnostics.logInfo("   ✅ SENDING: \(currentCount) strokes (was \(lastSyncedStrokeCount)), canvas: \(sharedPaperSize), bounds: \(paperDrawing.bounds)")
+            let newData = paperDrawing.dataRepresentation()
+            firebaseManager.sendDrawing(newData, userId: userId, canvasSize: sharedPaperSize, drawingBounds: paperDrawing.bounds)
             lastLocalDrawing = newData
             lastSyncedStrokeCount = currentCount
         } else {
             print("   ⏸️ Skip: No new strokes (\(currentCount) == \(lastSyncedStrokeCount))")
         }
-    }
-    
-    // Simple uniform scaling with centering: preserves aspect ratio, centers the drawing
-    private func scaleDrawingContentAware(_ drawing: PKDrawing, 
-                                          originalCanvas: CGSize,
-                                          originalBounds: CGRect,
-                                          targetCanvas: CGSize) -> PKDrawing {
-        // Validate inputs
-        guard originalCanvas.width > 0, originalCanvas.height > 0,
-              targetCanvas.width > 0, targetCanvas.height > 0,
-              originalCanvas.width.isFinite, originalCanvas.height.isFinite,
-              targetCanvas.width.isFinite, targetCanvas.height.isFinite else {
-            print("         ⚠️ INVALID INPUT! Original: \(originalCanvas), Target: \(targetCanvas) - returning original")
-            return drawing
-        }
-        
-        // Simple uniform scale based on canvas dimensions
-        let scaleX = targetCanvas.width / originalCanvas.width
-        let scaleY = targetCanvas.height / originalCanvas.height
-        
-        guard scaleX.isFinite, scaleY.isFinite, scaleX > 0, scaleY > 0 else {
-            print("         ⚠️ INVALID SCALES! scaleX: \(scaleX), scaleY: \(scaleY) - returning original")
-            return drawing
-        }
-        
-        let scale = min(scaleX, scaleY)
-        
-        // Calculate centering offset
-        let scaledWidth = originalCanvas.width * scale
-        let scaledHeight = originalCanvas.height * scale
-        let offsetX = (targetCanvas.width - scaledWidth) / 2.0
-        let offsetY = (targetCanvas.height - scaledHeight) / 2.0
-        
-        guard offsetX.isFinite, offsetY.isFinite else {
-            print("         ⚠️ INVALID OFFSETS! offsetX: \(offsetX), offsetY: \(offsetY) - returning original")
-            return drawing
-        }
-        
-        print("         Uniform scaling: \(originalCanvas) → \(targetCanvas)")
-        print("         Scale: \(scale), Offset: (\(offsetX), \(offsetY))")
-        
-        // Apply scale + offset to center the drawing
-        var transform = CGAffineTransform(scaleX: scale, y: scale)
-        transform = transform.translatedBy(x: offsetX / scale, y: offsetY / scale)
-        
-        let scaled = drawing.transformed(using: transform)
-        
-        print("         Result bounds: \(scaled.bounds)")
-        
-        return scaled
-    }
-    
-    // Simple canvas-to-canvas scaling with centering
-    private func scaleDrawing(_ drawing: PKDrawing, from originalSize: CGSize, to newSize: CGSize) -> PKDrawing {
-        // Validate inputs - prevent division by zero or invalid dimensions
-        guard originalSize.width > 0, originalSize.height > 0,
-              newSize.width > 0, newSize.height > 0,
-              originalSize.width.isFinite, originalSize.height.isFinite,
-              newSize.width.isFinite, newSize.height.isFinite else {
-            print("   ⚠️ INVALID SCALE INPUT! Original: \(originalSize), New: \(newSize) - returning original")
-            return drawing
-        }
-        
-        let scaleX = newSize.width / originalSize.width
-        let scaleY = newSize.height / originalSize.height
-        
-        // Validate scale factors
-        guard scaleX.isFinite, scaleY.isFinite, scaleX > 0, scaleY > 0 else {
-            print("   ⚠️ INVALID SCALE FACTORS! scaleX: \(scaleX), scaleY: \(scaleY) - returning original")
-            return drawing
-        }
-        
-        // Use UNIFORM scaling to preserve aspect ratio
-        let scale = min(scaleX, scaleY)
-        
-        // Calculate centering offset
-        let scaledWidth = originalSize.width * scale
-        let scaledHeight = originalSize.height * scale
-        let offsetX = (newSize.width - scaledWidth) / 2.0
-        let offsetY = (newSize.height - scaledHeight) / 2.0
-        
-        // Validate final values
-        guard offsetX.isFinite, offsetY.isFinite else {
-            print("   ⚠️ INVALID OFFSETS! offsetX: \(offsetX), offsetY: \(offsetY) - returning original")
-            return drawing
-        }
-        
-        print("   📐 Scale: \(scale), Offset: (\(offsetX), \(offsetY))")
-        print("   📐 Drawing bounds before: \(drawing.bounds)")
-        
-        // Apply scale + offset to center the drawing
-        var transform = CGAffineTransform(scaleX: scale, y: scale)
-        transform = transform.translatedBy(x: offsetX / scale, y: offsetY / scale)
-        
-        let scaled = drawing.transformed(using: transform)
-        
-        print("   📐 Drawing bounds after: \(scaled.bounds)")
-        
-        return scaled
     }
     
     // MARK: - Simultaneous Mode
@@ -1185,11 +1160,8 @@ class CanvasViewModel: ObservableObject {
                 let held = max(localCount, knownCount)
                 // A stale periodic/undo snapshot must not replace a fuller canvas,
                 // including a rejoin that already received stroke children.
-                if !destructive && held > 0 && drawing.strokes.count < held {
-                    print("   ⏸️ Ignoring smaller full canvas sync (\(drawing.strokes.count) < \(held))")
-                    if localCount > drawing.strokes.count {
-                        self.sendPeriodicFullSync()
-                    }
+                if !destructive && held > 0 {
+                    print("   ⏸️ Ignoring non-destructive full canvas sync on a live canvas")
                     return
                 }
                 
@@ -1198,14 +1170,7 @@ class CanvasViewModel: ObservableObject {
                 }
                 self.lastAppliedSyncId = syncId
                 
-                // Scale if needed
-                var finalDrawing = drawing
-                if let originalSize = canvasSize,
-                   self.currentCanvasSize.width > 0 && self.currentCanvasSize.height > 0,
-                   originalSize.width > 0 && originalSize.height > 0,
-                   originalSize != self.currentCanvasSize {
-                    finalDrawing = self.scaleDrawing(drawing, from: originalSize, to: self.currentCanvasSize)
-                }
+                let finalDrawing = self.drawingFromPaper(drawing, originalSize: canvasSize)
                 
                 // Clear our stroke tracking and rebuild from full sync
                 self.allKnownStrokes.removeAll()
@@ -1272,34 +1237,12 @@ class CanvasViewModel: ObservableObject {
         if !isUserDrawing {
             captureNewLocalStrokes()
         }
-        
-        // Periodic full canvas sync to prevent divergence
-        let timeSinceLastFullSync = Date().timeIntervalSince(lastFullSyncTime)
-        if timeSinceLastFullSync >= fullSyncInterval && canvasView.drawing.strokes.count > 0 {
-            sendPeriodicFullSync()
-        }
-    }
-    
-    /// Send periodic full canvas sync to keep devices in sync
-    private func sendPeriodicFullSync() {
-        lastFullSyncTime = Date()
-        
-        let drawingData = canvasView.drawing.dataRepresentation()
-        let syncId = UUID().uuidString
-        lastAppliedSyncId = syncId // Mark as our own so we don't reapply
-        
-        print("🔄📤 PERIODIC FULL SYNC - sending \(canvasView.drawing.strokes.count) strokes")
-        
-        firebaseManager.sendFullCanvasSync(
-            drawingData: drawingData,
-            userId: userId,
-            canvasSize: currentCanvasSize,
-            syncId: syncId
-        )
     }
     
     // Capture any new local strokes and add them to the collection
     private func captureNewLocalStrokes() {
+        guard !isRebuilding, !isReceivingUpdate else { return }
+        
         let currentStrokes = canvasView.drawing.strokes
         let timestamp = Date().timeIntervalSince1970
         
@@ -1312,22 +1255,24 @@ class CanvasViewModel: ObservableObject {
             
             // Get the new strokes from the end
             let newStrokes = Array(currentStrokes.suffix(newCount))
+            let paper = sharedPaperSize
             
             for (index, stroke) in newStrokes.enumerated() {
-                // Create unique ID and serialize
+                // Create unique ID and serialize in shared paper coordinates
                 let strokeId = UUID().uuidString
                 var singleStrokeDrawing = PKDrawing()
                 singleStrokeDrawing.strokes = [stroke]
-                let strokeData = singleStrokeDrawing.dataRepresentation()
+                let paperDrawing = drawingToPaper(singleStrokeDrawing)
+                let strokeData = paperDrawing.dataRepresentation()
                 
                 // Add to our known strokes IMMEDIATELY
                 let strokeInfo = StrokeInfo(
                     id: strokeId,
                     data: strokeData,
                     timestamp: timestamp + Double(index) * 0.001, // Slight offset to maintain order
-                    originalSize: currentCanvasSize,
+                    originalSize: paper,
                     originalUserId: userId,
-                    stroke: stroke // Cache the stroke
+                    stroke: stroke // Cache the local-space stroke
                 )
                 
                 allKnownStrokes[strokeId] = strokeInfo
@@ -1338,7 +1283,7 @@ class CanvasViewModel: ObservableObject {
                     strokeData: strokeData,
                     strokeId: strokeId,
                     userId: userId,
-                    canvasSize: currentCanvasSize
+                    canvasSize: paper
                 )
                 
                 // Self-echo: If echo mode is enabled, create echo copies with offset
@@ -1352,16 +1297,16 @@ class CanvasViewModel: ObservableObject {
                         var echoStroke = stroke
                         echoStroke.transform = echoStroke.transform.translatedBy(x: offset, y: offset)
                         
-                        // Serialize the offset stroke
+                        // Serialize the offset stroke in paper coordinates
                         var echoDrawing = PKDrawing()
                         echoDrawing.strokes = [echoStroke]
-                        let echoData = echoDrawing.dataRepresentation()
+                        let echoData = drawingToPaper(echoDrawing).dataRepresentation()
                         
                         let echoStrokeInfo = StrokeInfo(
                             id: echoId,
                             data: echoData,
                             timestamp: timestamp + Double(index) * 0.001 + Double(echoIndex) * 0.0001,
-                            originalSize: currentCanvasSize,
+                            originalSize: paper,
                             originalUserId: userId,
                             stroke: echoStroke
                         )
@@ -1373,7 +1318,7 @@ class CanvasViewModel: ObservableObject {
                             strokeData: echoData,
                             strokeId: echoId,
                             userId: userId,
-                            canvasSize: currentCanvasSize
+                            canvasSize: paper
                         )
                         
                         // Log the echo
@@ -1382,12 +1327,15 @@ class CanvasViewModel: ObservableObject {
                 }
             }
             
-            // If we added echo strokes, rebuild canvas to show them
+            // If we added echo strokes, rebuild canvas to show them.
+            // Count tracked strokes (original + echoes) so the next capture
+            // does not treat those echoes as new drawings and send them twice.
             if echoModeEnabled {
+                lastCanvasStrokeCount = strokeOrder.count
                 rebuildCanvas()
+            } else {
+                lastCanvasStrokeCount = currentStrokes.count
             }
-            
-            lastCanvasStrokeCount = currentStrokes.count
             updateCanUndo()
             
         } else if currentStrokes.count < lastCanvasStrokeCount {
@@ -1460,11 +1408,12 @@ class CanvasViewModel: ObservableObject {
         
         if roomMode == "turnBased" {
             if isMyTurn {
+                let paperDrawing = drawingToPaper(snapshot.drawing)
                 firebaseManager.sendDrawing(
-                    snapshot.drawing.dataRepresentation(),
+                    paperDrawing.dataRepresentation(),
                     userId: userId,
-                    canvasSize: currentCanvasSize,
-                    drawingBounds: snapshot.drawing.bounds
+                    canvasSize: sharedPaperSize,
+                    drawingBounds: paperDrawing.bounds
                 )
                 lastLocalDrawing = snapshot.drawing.dataRepresentation()
                 lastSyncedStrokeCount = snapshot.drawing.strokes.count
@@ -1473,9 +1422,9 @@ class CanvasViewModel: ObservableObject {
             let syncId = UUID().uuidString
             lastAppliedSyncId = syncId
             firebaseManager.sendFullCanvasSync(
-                drawingData: snapshot.drawing.dataRepresentation(),
+                drawingData: drawingToPaper(snapshot.drawing).dataRepresentation(),
                 userId: userId,
-                canvasSize: currentCanvasSize,
+                canvasSize: sharedPaperSize,
                 syncId: syncId
             )
             lastFullSyncTime = Date()
@@ -1566,11 +1515,12 @@ class CanvasViewModel: ObservableObject {
         if roomMode == "turnBased" {
             if isMyTurn {
                 let drawing = canvasView.drawing
+                let paperDrawing = drawingToPaper(drawing)
                 firebaseManager.sendDrawing(
-                    drawing.dataRepresentation(),
+                    paperDrawing.dataRepresentation(),
                     userId: userId,
-                    canvasSize: currentCanvasSize,
-                    drawingBounds: drawing.bounds
+                    canvasSize: sharedPaperSize,
+                    drawingBounds: paperDrawing.bounds
                 )
                 lastLocalDrawing = drawing.dataRepresentation()
                 lastSyncedStrokeCount = drawing.strokes.count
@@ -1580,14 +1530,14 @@ class CanvasViewModel: ObservableObject {
             return
         }
         
-        let drawingData = canvasView.drawing.dataRepresentation()
+        let drawingData = drawingToPaper(canvasView.drawing).dataRepresentation()
         let syncId = UUID().uuidString
         lastAppliedSyncId = syncId
         
         firebaseManager.sendFullCanvasSync(
             drawingData: drawingData,
             userId: userId,
-            canvasSize: currentCanvasSize,
+            canvasSize: sharedPaperSize,
             syncId: syncId,
             destructive: true
         )
@@ -1612,12 +1562,13 @@ class CanvasViewModel: ObservableObject {
             let strokeId = "local-\(UUID().uuidString)"
             var singleStrokeDrawing = PKDrawing()
             singleStrokeDrawing.strokes = [stroke]
+            let paperDrawing = drawingToPaper(singleStrokeDrawing)
             
             allKnownStrokes[strokeId] = StrokeInfo(
                 id: strokeId,
-                data: singleStrokeDrawing.dataRepresentation(),
+                data: paperDrawing.dataRepresentation(),
                 timestamp: timestamp + Double(index) * 0.001,
-                originalSize: currentCanvasSize,
+                originalSize: sharedPaperSize,
                 originalUserId: "synced",
                 stroke: stroke
             )
@@ -1660,17 +1611,7 @@ class CanvasViewModel: ObservableObject {
                 if let cachedStroke = strokeInfo.stroke {
                     strokes = [cachedStroke]
                 } else if let drawing = try? PKDrawing(data: strokeInfo.data) {
-                    // Scale if needed
-                    var scaledDrawing = drawing
-                    let needsScaling = (strokeInfo.originalSize != nil &&
-                                       self.currentCanvasSize.width > 0 && self.currentCanvasSize.height > 0 &&
-                                       strokeInfo.originalSize!.width > 0 && strokeInfo.originalSize!.height > 0 &&
-                                       strokeInfo.originalSize! != self.currentCanvasSize)
-                    
-                    if needsScaling, let originalSize = strokeInfo.originalSize {
-                        scaledDrawing = self.scaleDrawing(drawing, from: originalSize, to: self.currentCanvasSize)
-                    }
-                    
+                    let scaledDrawing = self.drawingFromPaper(drawing, originalSize: strokeInfo.originalSize)
                     strokes = scaledDrawing.strokes
                     
                     // Cache the scaled stroke
@@ -1743,7 +1684,7 @@ class CanvasViewModel: ObservableObject {
             strokeData: strokeInfo.data,
             strokeId: echoStrokeId,
             userId: userId,
-            canvasSize: strokeInfo.originalSize ?? currentCanvasSize,
+            canvasSize: strokeInfo.originalSize ?? sharedPaperSize,
             originalUserId: strokeInfo.originalUserId
         )
         

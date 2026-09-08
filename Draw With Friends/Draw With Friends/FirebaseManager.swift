@@ -448,6 +448,44 @@ class FirebaseManager: ObservableObject {
         room.child("fullCanvasSync").removeAllObservers()
         room.child("currentTurn").removeAllObservers()
         room.child("backgroundImage").removeAllObservers()
+        room.child("paper").removeAllObservers()
+    }
+    
+    // MARK: - Shared paper size (same drawing coordinates on every device)
+    
+    /// First device to write wins. Later devices must draw in this coordinate space.
+    func publishPaperSizeIfNeeded(_ size: CGSize) {
+        guard let roomCode = currentRoomCode, size.width > 32, size.height > 32 else { return }
+        
+        let paperRef = database.child("rooms").child(roomCode).child("paper")
+        paperRef.runTransactionBlock { current in
+            if current.value == nil || current.value is NSNull {
+                current.value = [
+                    "width": Double(size.width),
+                    "height": Double(size.height)
+                ]
+            }
+            return TransactionResult.success(withValue: current)
+        }
+    }
+    
+    func observePaperSize(completion: @escaping (CGSize) -> Void) {
+        guard let roomCode = currentRoomCode else { return }
+        
+        database.child("rooms").child(roomCode).child("paper").observe(.value) { snapshot in
+            guard let data = snapshot.value as? [String: Any],
+                  let width = Self.cgFloat(data["width"]),
+                  let height = Self.cgFloat(data["height"]),
+                  width > 32, height > 32 else { return }
+            completion(CGSize(width: width, height: height))
+        }
+    }
+    
+    private static func cgFloat(_ value: Any?) -> CGFloat? {
+        if let number = value as? Double { return CGFloat(number) }
+        if let number = value as? Int { return CGFloat(number) }
+        if let number = value as? NSNumber { return CGFloat(number.doubleValue) }
+        return nil
     }
 }
 

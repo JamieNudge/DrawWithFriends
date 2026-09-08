@@ -35,129 +35,126 @@ struct RoomView: View {
             )
             .ignoresSafeArea()
             
-            VStack(spacing: 15) {
-                // Title - shrink when keyboard appears
-                VStack(spacing: 8) {
-                    Image("AppIconImage")
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: isRoomCodeFocused ? 60 : 100, height: isRoomCodeFocused ? 60 : 100)
-                        .cornerRadius(20)
-                        .shadow(radius: 5)
-                    
-                    if !isRoomCodeFocused {
-                        Text("Draw With Friends")
-                            .font(.title)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                        
-                        Text("Collaborate in real-time!")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.9))
-                    }
-                }
-                .padding(.top, isRoomCodeFocused ? 10 : 30)
-                
-                // Room controls
-                VStack(spacing: 12) {
-                    // Mode selector
+            ScrollView {
+                VStack(spacing: 15) {
                     VStack(spacing: 8) {
-                        Text("Choose Drawing Mode")
-                            .foregroundColor(.white)
-                            .fontWeight(.bold)
-                            .font(.headline)
+                        Image("AppIconImage")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: isRoomCodeFocused ? 60 : 100, height: isRoomCodeFocused ? 60 : 100)
+                            .cornerRadius(20)
+                            .shadow(radius: 5)
                         
-                        HStack(spacing: 15) {
-                            // Simultaneous Mode Button
-                            Button(action: {
-                                selectedMode = .simultaneous
-                            }) {
-                                VStack(spacing: 4) {
-                                    Image(systemName: "bolt.fill")
-                                        .font(.system(size: 24))
-                                    Text("Simultaneous")
-                                        .font(.caption)
+                        if !isRoomCodeFocused {
+                            Text("Draw With Friends")
+                                .font(.title)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                            
+                            Text("Collaborate in real-time!")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.9))
+                        }
+                    }
+                    .padding(.top, isRoomCodeFocused ? 10 : 30)
+                    
+                    VStack(spacing: 12) {
+                        if !isRoomCodeFocused {
+                            VStack(spacing: 8) {
+                                Text("Choose Drawing Mode")
+                                    .foregroundColor(.white)
+                                    .fontWeight(.bold)
+                                    .font(.headline)
+                                
+                                HStack(spacing: 15) {
+                                    Button(action: {
+                                        selectedMode = .simultaneous
+                                    }) {
+                                        VStack(spacing: 4) {
+                                            Image(systemName: "bolt.fill")
+                                                .font(.system(size: 24))
+                                            Text("Simultaneous")
+                                                .font(.caption)
+                                                .fontWeight(.semibold)
+                                        }
+                                        .foregroundColor(selectedMode == .simultaneous ? .white : .white.opacity(0.6))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 12)
+                                        .padding(.horizontal, 8)
+                                        .background(selectedMode == .simultaneous ? Color.green : Color.white.opacity(0.2))
+                                        .cornerRadius(10)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .stroke(Color.white, lineWidth: selectedMode == .simultaneous ? 2 : 0)
+                                        )
+                                    }
+                                    
+                                    Button(action: {
+                                        selectedMode = .turnBased
+                                    }) {
+                                        VStack(spacing: 4) {
+                                            Image(systemName: "person.2.fill")
+                                                .font(.system(size: 24))
+                                            Text("Turn-Based")
+                                                .font(.caption)
+                                                .fontWeight(.semibold)
+                                        }
+                                        .foregroundColor(selectedMode == .turnBased ? .white : .white.opacity(0.6))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 12)
+                                        .padding(.horizontal, 8)
+                                        .background(selectedMode == .turnBased ? Color.blue : Color.white.opacity(0.2))
+                                        .cornerRadius(10)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .stroke(Color.white, lineWidth: selectedMode == .turnBased ? 2 : 0)
+                                        )
+                                    }
+                                }
+                            }
+                            .padding()
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(15)
+                            
+                            Button(action: createRoom) {
+                                HStack {
+                                    Image(systemName: "plus.circle.fill")
+                                    Text("Create New Room")
                                         .fontWeight(.semibold)
                                 }
-                                .foregroundColor(selectedMode == .simultaneous ? .white : .white.opacity(0.6))
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .padding(.horizontal, 8)
-                                .background(selectedMode == .simultaneous ? Color.green : Color.white.opacity(0.2))
+                                .padding(12)
+                                .background(Color.white)
+                                .foregroundColor(.blue)
                                 .cornerRadius(10)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .stroke(Color.white, lineWidth: selectedMode == .simultaneous ? 2 : 0)
-                                )
                             }
                             
-                            // Turn-Based Mode Button
-                            Button(action: {
-                                selectedMode = .turnBased
-                            }) {
-                                VStack(spacing: 4) {
-                                    Image(systemName: "person.2.fill")
-                                        .font(.system(size: 24))
-                                    Text("Turn-Based")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                }
-                                .foregroundColor(selectedMode == .turnBased ? .white : .white.opacity(0.6))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .padding(.horizontal, 8)
-                                .background(selectedMode == .turnBased ? Color.blue : Color.white.opacity(0.2))
-                                .cornerRadius(10)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .stroke(Color.white, lineWidth: selectedMode == .turnBased ? 2 : 0)
-                                )
+                            HStack {
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.5))
+                                    .frame(height: 1)
+                                Text("OR")
+                                    .foregroundColor(.white)
+                                    .fontWeight(.semibold)
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.5))
+                                    .frame(height: 1)
                             }
                         }
+                        
+                        RoomCodeInputView(
+                            roomCode: $roomCode,
+                            isRoomCodeFocused: $isRoomCodeFocused,
+                            onJoinRoom: joinRoom
+                        )
                     }
-                    .padding()
-                    .background(Color.white.opacity(0.1))
-                    .cornerRadius(15)
-                    
-                    // Create new room button
-                    Button(action: createRoom) {
-                        HStack {
-                            Image(systemName: "plus.circle.fill")
-                            Text("Create New Room")
-                                .fontWeight(.semibold)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(12)
-                        .background(Color.white)
-                        .foregroundColor(.blue)
-                        .cornerRadius(10)
-                    }
-                    
-                    // Divider
-                    HStack {
-                        Rectangle()
-                            .fill(Color.white.opacity(0.5))
-                            .frame(height: 1)
-                        Text("OR")
-                            .foregroundColor(.white)
-                            .fontWeight(.semibold)
-                        Rectangle()
-                            .fill(Color.white.opacity(0.5))
-                            .frame(height: 1)
-                    }
-                    
-                    // Join existing room - isolated to prevent parent re-renders
-                    RoomCodeInputView(
-                        roomCode: $roomCode,
-                        isRoomCodeFocused: $isRoomCodeFocused,
-                        onJoinRoom: joinRoom
-                    )
+                    .padding(.horizontal, 30)
+                    .padding(.bottom, 10)
                 }
-                .padding(.horizontal, 30)
-                .padding(.bottom, 10)
-                
-                Spacer(minLength: 0)
+                .frame(maxWidth: .infinity)
             }
+            .scrollDismissesKeyboard(.interactively)
+            .scrollIndicators(.hidden)
             .animation(.easeInOut(duration: 0.3), value: isRoomCodeFocused)
             
             Button(action: { showSettings = true }) {
@@ -171,16 +168,6 @@ struct RoomView: View {
             .accessibilityLabel("Settings")
             .padding(.top, 8)
             .padding(.trailing, 16)
-            
-            // Tap anywhere to dismiss keyboard
-            if isRoomCodeFocused {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        isRoomCodeFocused = false
-                    }
-                    .ignoresSafeArea()
-            }
         }
         .alert("Room Status", isPresented: $showAlert) {
             Button("OK", role: .cancel) { }
@@ -298,6 +285,17 @@ struct RoomCodeInputView: View {
                         .autocorrectionDisabled(true)
                         .textInputAutocapitalization(.never)
                         .accentColor(.purple)
+                        .toolbar {
+                            ToolbarItemGroup(placement: .keyboard) {
+                                Spacer()
+                                Button("Join") {
+                                    isRoomCodeFocused = false
+                                    onJoinRoom()
+                                }
+                                .disabled(roomCode.isEmpty)
+                                .fontWeight(.semibold)
+                            }
+                        }
                 }
                 .padding(12)
                 .padding(.trailing, 40) // Space for clear button
