@@ -283,7 +283,7 @@ class FirebaseManager: ObservableObject {
     // MARK: - Full Canvas Sync (for eraser and periodic reconciliation)
     
     /// Send full canvas state - used after erasing or for periodic sync
-    func sendFullCanvasSync(drawingData: Data, userId: String, canvasSize: CGSize, syncId: String) {
+    func sendFullCanvasSync(drawingData: Data, userId: String, canvasSize: CGSize, syncId: String, destructive: Bool = false) {
         guard let roomCode = currentRoomCode else { return }
         
         let syncRef = database.child("rooms").child(roomCode).child("fullCanvasSync")
@@ -294,7 +294,8 @@ class FirebaseManager: ObservableObject {
             "syncId": syncId,
             "timestamp": ServerValue.timestamp(),
             "canvasWidth": canvasSize.width,
-            "canvasHeight": canvasSize.height
+            "canvasHeight": canvasSize.height,
+            "destructive": destructive
         ]
         
         syncRef.setValue(data)
@@ -302,7 +303,7 @@ class FirebaseManager: ObservableObject {
     }
     
     /// Observe full canvas sync events
-    func observeFullCanvasSync(completion: @escaping (Data, String, String, CGSize?) -> Void) {
+    func observeFullCanvasSync(completion: @escaping (Data, String, String, CGSize?, Bool) -> Void) {
         guard let roomCode = currentRoomCode else { return }
         
         let syncRef = database.child("rooms").child(roomCode).child("fullCanvasSync")
@@ -319,8 +320,9 @@ class FirebaseManager: ObservableObject {
                    let height = data["canvasHeight"] as? Double {
                     canvasSize = CGSize(width: width, height: height)
                 }
+                let destructive = data["destructive"] as? Bool ?? false
                 
-                completion(drawingData, userId, syncId, canvasSize)
+                completion(drawingData, userId, syncId, canvasSize, destructive)
             }
         }
     }

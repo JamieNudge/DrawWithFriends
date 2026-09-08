@@ -1153,7 +1153,7 @@ class CanvasViewModel: ObservableObject {
         
         // Observe full canvas syncs (for eraser and periodic reconciliation)
         print("   Setting up full canvas sync observer...")
-        firebaseManager.observeFullCanvasSync { [weak self] (drawingData: Data, senderId: String, syncId: String, canvasSize: CGSize?) in
+        firebaseManager.observeFullCanvasSync { [weak self] (drawingData: Data, senderId: String, syncId: String, canvasSize: CGSize?, destructive: Bool) in
             guard let self = self else { return }
             
             // Ignore a sync we just sent (live echo). Apply it if this canvas is
@@ -1172,7 +1172,6 @@ class CanvasViewModel: ObservableObject {
             print("🔄📥 RECEIVING FULL CANVAS SYNC from \(senderId.prefix(8)), syncId: \(syncId.prefix(8))")
             
             self.markActivity()
-            self.lastAppliedSyncId = syncId
             
             // Apply the full canvas state
             DispatchQueue.main.async {
@@ -1180,6 +1179,24 @@ class CanvasViewModel: ObservableObject {
                     print("   ❌ Failed to decode full canvas sync")
                     return
                 }
+                
+                let localCount = self.canvasView.drawing.strokes.count
+                let knownCount = self.allKnownStrokes.count
+                let held = max(localCount, knownCount)
+                // A stale periodic/undo snapshot must not replace a fuller canvas,
+                // including a rejoin that already received stroke children.
+                if !destructive && held > 0 && drawing.strokes.count < held {
+                    print("   ⏸️ Ignoring smaller full canvas sync (\(drawing.strokes.count) < \(held))")
+                    if localCount > drawing.strokes.count {
+                        self.sendPeriodicFullSync()
+                    }
+                    return
+                }
+                
+                if syncId == self.lastAppliedSyncId {
+                    return
+                }
+                self.lastAppliedSyncId = syncId
                 
                 // Scale if needed
                 var finalDrawing = drawing
@@ -1374,11 +1391,17 @@ class CanvasViewModel: ObservableObject {
             updateCanUndo()
             
         } else if currentStrokes.count < lastCanvasStrokeCount {
-            recordEraseUndoIfNeeded()
-            handleStrokesRemoved()
+            if self.canvasView.tool is PKEraserTool {
+                recordEraseUndoIfNeeded()
+                handleStrokesRemoved()
+            } else {
+                lastCanvasStrokeCount = currentStrokes.count
+            }
         } else if drawingWasModifiedInPlace() {
-            recordEraseUndoIfNeeded()
-            handleStrokesRemoved()
+            if self.canvasView.tool is PKEraserTool {
+                recordEraseUndoIfNeeded()
+                handleStrokesRemoved()
+            }
         }
     }
     
@@ -1418,6 +1441,13 @@ class CanvasViewModel: ObservableObject {
     }
     
     private func restoreEraseUndo() -> Bool {
+        while let snapshot = eraseUndoStack.last,
+              roomMode != "turnBased",
+              snapshot.drawing.strokes.count < canvasView.drawing.strokes.count {
+            eraseUndoStack.removeLast()
+            diagnostics.logInfo("Dropped stale erase snapshot (\(snapshot.drawing.strokes.count) < \(canvasView.drawing.strokes.count))")
+        }
+        
         guard let snapshot = eraseUndoStack.popLast() else { return false }
         
         diagnostics.logInfo("Undo last erase")
@@ -1558,7 +1588,8 @@ class CanvasViewModel: ObservableObject {
             drawingData: drawingData,
             userId: userId,
             canvasSize: currentCanvasSize,
-            syncId: syncId
+            syncId: syncId,
+            destructive: true
         )
         firebaseManager.clearAllStrokes()
         lastFullSyncTime = Date()
